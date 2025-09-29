@@ -1,0 +1,342 @@
+#!/bin/bash
+
+# CAUTION: this script could be dangerous!!!
+# Secure Boot for Kali by ALTERRQ
+
+# Colors
+RED="\e[1;31m"
+GREEN="\e[1;32m"
+BLUE="\e[1;34m"
+ORANGE="\e[1;33m"
+PURPLE="\e[1;35m"
+CYAN="\e[1;36m"
+ENDCOLOR="\e[0m"
+
+# Function for consistent error messages
+error_exit() {
+    echo -e "${RED}[ERROR] $1${ENDCOLOR}" >&2
+    exit 1
+}
+
+# Function for consistent info messages
+info_msg() {
+    echo -e "${BLUE}[INFO] $1${ENDCOLOR}"
+}
+
+# Function for consistent success messages
+success_msg() {
+    echo -e "${GREEN}[SUCCESS] $1${ENDCOLOR}"
+}
+
+# Function for consistent warning messages
+warning_msg() {
+    echo -e "${ORANGE}[WARNING] $1${ENDCOLOR}"
+}
+
+# Some variables
+CERT_DIR=/root/secureboot
+BOOTLOADER=/boot/efi/EFI/kali/grubx64.efi
+KERNEL_VERSION=$(uname -r)
+KERNEL_IMAGE="/boot/vmlinuz-$KERNEL_VERSION"
+MS_GUID=77fa9abd-0359-4d32-bd60-28f4e78f784b
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_FILE="$CERT_DIR/kali-sb.log"
+
+# Source functions.sh
+source "$SCRIPT_DIR/functions"
+
+# Logging
+> "$LOG_FILE"
+exec > >(tee >(
+    while IFS= read -r line; do
+        printf "%s: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$line" >> "$LOG_FILE"
+    done
+))
+exec 2>&1
+
+# Check root
+if [[ $EUID -ne 0 ]]; then
+    error_exit "This script must be run as root."
+fi
+
+# Create a home for the script in /root
+if [[ ! -d "$CERT_DIR" ]]; then
+    mkdir -vp "$CERT_DIR"/{auth,bak,cfg,esl,extract} > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+        error_exit "Failed to create $CERT_DIR"
+    fi
+fi
+
+# Source .config
+if [[ -f "$CERT_DIR/.config" ]]; then
+    source "$CERT_DIR/.config"
+fi
+
+# Install dependencies
+DEPLIST="openssl efitools sbsigntool pesign uuid-runtime systemd-boot-tools"
+if [[ "$DEPS" -eq 0 || ! -f "$CERT_DIR/.config" ]]; then
+    sudo apt update
+    sudo apt install $DEPLIST -y
+    if [ $? -ne 0 ]; then
+        DEPS=0
+        error_exit "Failed to install dependencies"
+        exit 1
+    else
+        DEPS=1
+        success_msg "Dependencies installed successfully."
+        read -rp "Press Enter to continue..."
+    fi
+else
+    info_msg "Dependencies should be installed..."
+fi
+
+# Determine and save some vars to .config
+if [[ ! -f "$CERT_DIR/.config" ]]; then
+    # Status tracking variables
+    BACKUP_DONE=0
+    MKCONFIGS_DONE=0
+    MKCERT_DONE=0
+    CONVERT_DONE=0
+    SIGN_DONE=0
+    ENROLL_DONE=0
+    ENROLL_OEM_DONE=0
+    ENROLL_MS_DONE=0
+
+# Get OEM name
+OEM_NAME=$(efi-readvar -v PK 2>&1 | grep -m1 "CN=" | awk -F'CN=' '{print $2}' | awk '{print $1}')
+if [ -z "$OEM_NAME" ]; then
+    error_exit "Could not determine OEM name"
+fi
+
+# Get KEK_NUM and OEM_GUID
+KEK_INFO=$(efi-readvar -v KEK 2>&1)
+if [ $? -ne 0 ]; then
+    error_exit "Failed to read KEK variables"
+fi
+
+KEK_NUM=$(echo "$KEK_INFO" | awk -v oem="$OEM_NAME" '
+/^KEK: List/ {gsub(/,/, "", $3); list=$3}
+/CN=/ && $0 ~ oem {print list; exit}')
+
+OEM_GUID=$(echo "$KEK_INFO" | awk -v oem="$OEM_NAME" '
+/owner/ {gsub(/,/, "", $NF); guid=$NF}
+/CN=/ && $0 ~ oem {print guid; exit}')
+
+if [ -z "$KEK_NUM" ]; then
+    error_exit "OEM:'$OEM_NAME' is not found in KEK"
+fi
+
+# Get db_NUM
+DB_INFO=$(efi-readvar -v db 2>&1)
+if [ $? -ne 0 ]; then
+    error_exit "Failed to read db variables"
+fi
+
+db_NUM=$(echo "$DB_INFO" | awk -v oem="$OEM_NAME" '
+/^db: List/ {gsub(/,/, "", $3); list=$3}
+/CN=/ && $0 ~ oem {print list; exit}')
+
+if [ -z "$db_NUM" ]; then
+    error_exit "OEM:'$OEM_NAME' is not found in db"
+fi
+
+# Get Microsoft key list numbers for KEK
+KEK_MICROSOFT_LISTS=$(echo "$KEK_INFO" | awk -v guid="$MS_GUID" '
+/^KEK: List/ {gsub(/,/, "", $3); list=$3}
+/owner/ && $NF ~ guid {print list}')
+
+# Convert to array
+KEK_MICROSOFT_LISTS=($KEK_MICROSOFT_LISTS)
+
+# Get Microsoft key list numbers for db
+DB_MICROSOFT_LISTS=$(echo "$DB_INFO" | awk -v guid="$MS_GUID" '
+/^db: List/ {gsub(/,/, "", $3); list=$3}
+/owner/ && $NF ~ guid {print list}')
+
+# Convert to array
+DB_MICROSOFT_LISTS=($DB_MICROSOFT_LISTS)
+
+# Variables to save to .config
+variables_to_save=(
+    "OEM_NAME"
+    "KEK_NUM"
+    "db_NUM"
+    "OEM_GUID"
+    "DEPS"
+    "KEK_MICROSOFT_LISTS[@]"
+    "DB_MICROSOFT_LISTS[@]"
+)
+
+# Save the vars to .config
+: > "$CERT_DIR/.config" # Clear or create .config file
+for var in "${variables_to_save[@]}"; do
+    if [[ $var == *[@] ]]; then
+        # Handle arrays
+        var_name=${var%[@]}
+        declare -n array_ref="$var_name"
+        echo "${var_name}=(${array_ref[*]})" >> "$CERT_DIR/.config"
+    else
+        # Handle scalars
+        echo "${var}=\"${!var}\"" >> "$CERT_DIR/.config"
+    fi
+done
+fi
+
+complete_setup_stage1(){
+    info_msg "Starting complete Secure Boot setup..."
+    
+    # Execute all steps in sequence
+    backup
+    mkconfigs
+    mkcert
+    convert
+
+    # Signal script to start stage2 in next run
+    STAGE_2=1
+    echo "STAGE_2=1" >> "$CERT_DIR"/.config
+
+    echo -e "${BLUE}===========================================================${ENDCOLOR}"
+    echo -e "${CYAN}[*] Please reboot to UEFI(BIOS) & delete all enrolled keys!${ENDCOLOR}"
+    echo -e "${CYAN}[*] Also disable Key Provisioning if present!${ENDCOLOR}"
+    echo -e "${CYAN}[*] Then run the 1. option again to complete the setup!!!${ENDCOLOR}"
+    echo -e "${BLUE}===========================================================${ENDCOLOR}"
+}
+
+complete_setup_stage2(){
+    info_msg "Continuing complete Secure Boot setup..."
+
+    # Execute all steps in sequence
+    info_msg "Installing GRUB for Secure Boot..."
+    grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=kali --modules="tpm" --disable-shim-lock || error_exit "Failed to install GRUB for Secure Boot"
+    success_msg "Installed GRUB succesfully."
+    sign
+    enroll
+    enroll_oem
+    read -rp "Do you want to enroll Microsoft keys (for dualboot with Windows)? [y/N]: " response
+    if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+        enroll_ms
+    else
+        info_msg "Microsoft keys will not be enrolled."
+    fi
+    info_msg "Enrolled keys:"
+    efi-readvar
+
+    echo -e "${BLUE}==============================================${ENDCOLOR}"
+    echo -e "${CYAN}##############################################${ENDCOLOR}"
+    echo -e "${GREEN}[+] Secure Boot setup completed successfully!${ENDCOLOR}"
+    echo -e "${GREEN}[+] Now enable Secure Boot!${ENDCOLOR}"
+    echo -e "${CYAN}##############################################${ENDCOLOR}"
+    echo -e "${BLUE}==============================================${ENDCOLOR}"
+}
+
+# Function to display the menu
+display_menu() {
+    clear
+    echo -e "${BLUE}===================================================${ENDCOLOR}"
+    echo -e "${CYAN}         Kali Linux Secure Boot Setup Menu       ${ENDCOLOR}"
+    echo -e "${BLUE}===================================================${ENDCOLOR}"
+    echo -e "${GREEN}1. Complete Secure Boot Setup (Do Everything)${ENDCOLOR}"
+    echo -e "${GREEN}2. Get Status${ENDCOLOR}"
+    echo -e "${GREEN}3. Backup Enrolled Keys${ENDCOLOR}"
+    echo -e "${GREEN}4. Create Secure Boot Keys${ENDCOLOR}"
+    echo -e "${GREEN}5. Convert Certificates to Esl & Auth Format${ENDCOLOR}"
+    echo -e "${GREEN}6. Enroll Created and OEM Keys${ENDCOLOR}"
+    echo -e "${GREEN}7. Enroll Microsoft Keys${ENDCOLOR}"
+    echo -e "${GREEN}8. Install GRUB for Secure Boot${ENDCOLOR}"
+    echo -e "${GREEN}9. Sign Bootloader & Kernel${ENDCOLOR}"
+    echo -e "${PURPLE}10. Reboot to UEFI Settings${ENDCOLOR}"
+    echo -e "${GREEN}11. Restore Backed Up files${ENDCOLOR}"
+    echo -e "${RED}12. Reset Script (Also created keys will be lost!!!)${ENDCOLOR}"
+    echo -e "${RED}13. Exit${ENDCOLOR}"
+    echo -e "${BLUE}===================================================${ENDCOLOR}"
+    echo -n -e "${BLUE}[*] Enter your choice (1-13): ${ENDCOLOR}"
+}
+
+# Main loop
+while true; do
+    display_menu
+    read choice
+
+    case $choice in
+        1)
+            # Start stage2
+    	    if [[ "$STAGE_2" -eq 1 ]]; then
+                complete_setup_stage2
+                read -rp "Press Enter to continue..."
+    	    else
+                complete_setup_stage1
+                read -rp "Press Enter to continue..."
+            fi
+            ;;
+        2)
+            info_msg "Secure Boot status:"
+            bootctl status 2>&1 | grep 'Secure Boot' || warning_msg "Failed to determine secure boot status"
+            echo ""
+            info_msg "Enrolled keys:"
+            efi-readvar
+            read -rp "Press Enter to continue..."
+            ;;
+        3)
+            backup
+            read -rp "Press Enter to continue..."
+            ;;
+        4)
+            mkconfigs
+            mkcert
+            read -rp "Press Enter to continue..."
+            ;;
+        5)
+            convert
+            read -rp "Press Enter to continue..."
+            ;;
+        6)
+            enroll
+            enroll_oem
+            info_msg "Enrolled keys:"
+            efi-readvar
+            read -rp "Press Enter to continue..."
+            ;;
+        7)
+            enroll_ms
+            info_msg "Enrolled keys:"
+            efi-readvar
+            read -rp "Press Enter to continue..."
+            ;;
+        8)
+            info_msg "Installing GRUB for Secure Boot..."
+            grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=kali --modules="tpm" --disable-shim-lock || error_exit "Failed to install GRUB for Secure Boot"
+            success_msg "Installed GRUB succesfully."
+            read -rp "Press Enter to continue..."
+            ;;
+        9)
+            sign
+            read -rp "Press Enter to continue..."
+            ;;
+        10)
+            info_msg "Rebooting to UEFI firmware settings..."
+            systemctl reboot --firmware-setup
+            ;;
+        11)
+            restore
+            read -rp "Press Enter to continue..."
+            ;;
+        12)
+            read -rp "Do you want to reset? [y/N]: " response
+            response="${response:-no}"
+            if [[ "${response,,}" =~ ^(y|yes)$ ]]; then
+                reset
+            else
+                info_msg "Reset aborted."
+            fi
+            read -rp "Press Enter to continue..."
+            ;;
+        13)
+            info_msg "Exiting..."
+            exit 0
+            ;;
+        *)
+            error_exit "Invalid option! Please select a valid choice."
+            read -rp "Press Enter to continue..."
+            ;;
+    esac
+done

@@ -1,0 +1,475 @@
+#!/bin/bash
+
+# CAUTION: this script could be dangerous!!!
+# SBK functions by ALTERRQ
+
+reset(){
+    info_msg "Resetting script!"
+
+    # Delete script files
+    rm -fr "$CERT_DIR"
+
+    if [ $? -eq 0 ]; then
+        success_msg "Reset completed successfully."
+        exit 0
+    else
+        error_exit "Failed to reset script files."
+    fi
+}
+
+backup(){
+    info_msg "Creating backup of existing keys & files..."
+
+    # Create backup directory if it doesn't exist
+    mkdir -p "$CERT_DIR/bak"
+
+    # Backup currently enrolled certs
+    efi-readvar > "$CERT_DIR"/bak/all-efi-keys-original.txt || error_exit "Failed to backup all-efi-keys"
+    efi-readvar -v PK  -o "$CERT_DIR"/bak/PK-original.esl || error_exit "Failed to backup PK"
+    efi-readvar -v KEK -o "$CERT_DIR"/bak/KEK-original.esl || error_exit "Failed to backup KEK"
+    efi-readvar -v db  -o "$CERT_DIR"/bak/db-original.esl || error_exit "Failed to backup db"
+    efi-readvar -v dbx -o "$CERT_DIR"/bak/dbx-original.esl || error_exit "Failed to backup dbx"
+
+    # Backup Files that are will be signed
+    if [ -f "$BOOTLOADER" ]; then
+        cp -v "$BOOTLOADER" "$CERT_DIR"/bak/ || error_exit "Failed to backup bootloader"
+    else
+        warning_msg "Bootloader not found at $BOOTLOADER"
+    fi
+
+    if [ -f "$KERNEL_IMAGE" ]; then
+        cp -v "$KERNEL_IMAGE" "$CERT_DIR"/bak/ || error_exit "Failed to backup kernel"
+    else
+        warning_msg "Kernel image not found at $KERNEL_IMAGE"
+    fi
+
+    # List backed up files
+    ls -lh "$CERT_DIR"/bak/
+
+    BACKUP_DONE=1
+    echo "BACKUP_DONE=1" >> "$CERT_DIR"/.config
+    success_msg "Backup completed successfully."
+}
+
+restore(){
+    info_msg "Restoring backed up files..."
+
+    # Check if backup exists
+    if [ ! -f "$CERT_DIR/bak/grubx64.efi" ]; then
+        error_exit "No backup found for grubx64.efi. Run backup first."
+    fi
+
+    if [ ! -f "$CERT_DIR/bak/vmlinuz-$KERNEL_VERSION" ]; then
+        error_exit "No backup found for kernel. Run backup first."
+    fi
+
+    # Restore grub
+    cp -vf "$CERT_DIR"/bak/grubx64.efi /boot/efi/EFI/kali/grubx64.efi || error_exit "Failed to restore grubx64.efi"
+
+    # Restore kernel
+    cp -vf "$CERT_DIR"/bak/"vmlinuz-$KERNEL_VERSION" "$KERNEL_IMAGE" || error_exit "Failed to restore $KERNEL_VERSION"
+
+    success_msg "Restoration completed successfully."
+
+    echo -e "${BLUE}===========================================================${ENDCOLOR}"
+    echo -e "${CYAN}[*] Restore original keys in your UEFI(BIOS)!${ENDCOLOR}"
+    echo -e "${CYAN}[*] That's the easiest and safest way to do it.${ENDCOLOR}"
+    echo -e "${BLUE}===========================================================${ENDCOLOR}"
+}
+
+mkconfigs(){
+    info_msg "Creating configuration files for key generation..."
+
+    # Check if backup was done
+    if [ $BACKUP_DONE -eq 0 ]; then
+        warning_msg "Backup not done. It's recommended to run backup first."
+        read -rp "Continue without backup? [y/N]: " response
+        if [[ ! "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+            info_msg "Aborting configuration creation."
+            return 1
+        fi
+    fi
+
+    mkdir -p "$CERT_DIR"/cfg
+
+    # Make PK.cfg
+    cat <<EOF > "$CERT_DIR/cfg/PK.cfg"
+[ req ]
+default_bits         = 4096
+encrypt_key          = no
+string_mask          = utf8only
+utf8                 = yes
+prompt               = no
+distinguished_name   = my_dist_name
+x509_extensions      = my_x509_exts
+
+[ my_dist_name ]
+commonName           = Prototype PK
+emailAddress         = alterrq@gmail.com
+
+[ my_x509_exts ]
+keyUsage             = digitalSignature
+extendedKeyUsage     = codeSigning
+basicConstraints     = critical,CA:FALSE
+subjectKeyIdentifier = hash
+EOF
+
+    [ $? -eq 0 ] || error_exit "Failed to create PK.cfg"
+
+    # Make KEK.cfg
+    cp -v "$CERT_DIR"/cfg/PK.cfg "$CERT_DIR"/cfg/KEK.cfg || error_exit "Failed to copy PK.cfg to KEK.cfg"
+    sed -i 's/PK/KEK/g' "$CERT_DIR"/cfg/KEK.cfg || error_exit "Failed to modify KEK.cfg"
+
+    # Make db.cfg
+    cp -v "$CERT_DIR"/cfg/PK.cfg "$CERT_DIR"/cfg/db.cfg || error_exit "Failed to copy PK.cfg to db.cfg"
+    sed -i 's/PK/db/g' "$CERT_DIR"/cfg/db.cfg || error_exit "Failed to modify db.cfg"
+
+    MKCONFIGS_DONE=1
+    echo "MKCONFIGS_DONE=1" >> "$CERT_DIR"/.config
+    success_msg "Configuration files created successfully."
+}
+
+mkcert(){
+    info_msg "Generating Secure Boot keys..."
+
+    # Check if configs were created
+    if [ $MKCONFIGS_DONE -eq 0 ]; then
+        error_exit "Configuration files not created. Run mkconfigs first."
+    fi
+
+    # Create Platform Key
+    openssl req -x509 -sha256 -days 5490 -outform PEM \
+    -config "$CERT_DIR"/cfg/PK.cfg \
+    -keyout "$CERT_DIR"/PK.key -out "$CERT_DIR"/PK.pem || error_exit "Failed to generate PK"
+
+    # Create Key Exchange Key
+    openssl req -x509 -sha256 -days 5490 -outform PEM \
+    -config "$CERT_DIR"/cfg/KEK.cfg \
+    -keyout "$CERT_DIR"/KEK.key -out "$CERT_DIR"/KEK.pem || error_exit "Failed to generate KEK"
+
+    # Create Signature Database
+    openssl req -x509 -sha256 -days 5490 -outform PEM \
+    -config "$CERT_DIR"/cfg/db.cfg \
+    -keyout "$CERT_DIR"/db.key -out "$CERT_DIR"/db.pem || error_exit "Failed to generate db"
+
+    # Check keys
+    ls -l "$CERT_DIR"/*.pem "$CERT_DIR"/*.key
+
+    MKCERT_DONE=1
+    echo "MKCERT_DONE=1" >> "$CERT_DIR"/.config
+    success_msg "Key generation completed successfully."
+}
+
+convert(){
+    info_msg "Converting certificates to EFI format..."
+
+    # Check if keys were generated
+    if [ $MKCERT_DONE -eq 0 ]; then
+        error_exit "Keys not generated. Run mkcert first."
+    fi
+
+    # Check if backup was done
+    if [ $BACKUP_DONE -eq 0 ]; then
+        error_exit "Backup not done. Run backup first."
+    fi
+
+    #### Convert own certificates ####
+
+    # Create random GUID
+    if [[ ! -f "$CERT_DIR/guid.txt" ]]; then
+        echo "$(uuidgen --random)" > "$CERT_DIR/guid.txt" || error_exit "Failed to generate GUID"
+        info_msg "Generated new GUID: $(cat "$CERT_DIR"/guid.txt)"
+    fi
+    info_msg "Using GUID: $(cat "$CERT_DIR"/guid.txt)"
+
+    # Create PK ESL file
+    cert-to-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
+    "$CERT_DIR"/PK.pem "$CERT_DIR"/esl/PK.esl || error_exit "Failed to create PK.esl"
+
+    # Create PK AUTH file
+    sign-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
+    -t "$(date +'%F %T')" \
+    -c "$CERT_DIR"/PK.pem -k "$CERT_DIR"/PK.key \
+    PK \
+    "$CERT_DIR"/esl/PK.esl "$CERT_DIR"/auth/PK.auth || error_exit "Failed to create PK.auth"
+
+    # Create a KEK ESL file
+    cert-to-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
+    "$CERT_DIR"/KEK.pem "$CERT_DIR"/esl/KEK.esl || error_exit "Failed to create KEK.esl"
+
+    # Create a KEK AUTH file
+    sign-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
+    -t "$(date +'%F %T')" \
+    -c "$CERT_DIR"/PK.pem -k "$CERT_DIR"/PK.key \
+    KEK \
+    "$CERT_DIR"/esl/KEK.esl "$CERT_DIR"/auth/KEK.auth || error_exit "Failed to create KEK.auth"
+
+    # Create a db ESL file
+    cert-to-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
+    "$CERT_DIR"/db.pem "$CERT_DIR"/esl/db.esl || error_exit "Failed to create db.esl"
+
+    # Create a db AUTH file
+    sign-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
+    -t "$(date +'%F %T')" \
+    -c "$CERT_DIR"/KEK.pem -k "$CERT_DIR"/KEK.key \
+    db \
+    "$CERT_DIR"/esl/db.esl "$CERT_DIR"/auth/db.auth || error_exit "Failed to create db.auth"
+
+    ####Convert backed up Keys####
+
+    # Convert backed up OEM KEK Key
+
+    # Extract KEK-original
+    sig-list-to-certs "$CERT_DIR"/bak/KEK-original.esl "$CERT_DIR"/extract/KEK || error_exit "Failed to extract KEK-original"
+
+    openssl x509 -noout -subject -dates -inform DER -in "$CERT_DIR"/extract/KEK-"$KEK_NUM".der || error_exit "Failed to read KEK certificate"
+
+    # Create a KEK ESL file
+    sbsiglist --type x509 \
+    --owner "$OEM_GUID" \
+    "$CERT_DIR"/extract/KEK-"$KEK_NUM".der \
+    --output "$CERT_DIR"/esl/KEK_"$OEM_NAME".esl || error_exit "Failed to create KEK_$OEM_NAME.esl"
+
+    # Create a KEK AUTH file
+    sign-efi-sig-list -a -g "$OEM_GUID" \
+    -t "$(date +'%F %T')" \
+    -k "$CERT_DIR"/PK.key -c "$CERT_DIR"/PK.pem \
+    KEK \
+    "$CERT_DIR"/esl/KEK_"$OEM_NAME".esl \
+    "$CERT_DIR"/auth/KEK_"$OEM_NAME".auth || error_exit "Failed to create KEK_$OEM_NAME.auth"
+
+    # Convert backed up OEM db Key
+
+    # Extract db-original
+    sig-list-to-certs "$CERT_DIR"/bak/db-original.esl "$CERT_DIR"/extract/db || error_exit "Failed to extract db-original"
+
+    openssl x509 -noout -subject -dates -inform DER -in "$CERT_DIR"/extract/db-"$db_NUM".der || error_exit "Failed to read db certificate"
+
+    # Create a db ESL file
+    sbsiglist --type x509 \
+    --owner "$OEM_GUID" \
+    "$CERT_DIR"/extract/db-"$db_NUM".der \
+    --output "$CERT_DIR"/esl/db_"$OEM_NAME".esl || error_exit "Failed to create db_$OEM_NAME.esl"
+
+    # Create a db AUTH file
+    sign-efi-sig-list -a -g "$OEM_GUID" \
+    -t "$(date +'%F %T')" \
+    -k "$CERT_DIR"/KEK.key -c "$CERT_DIR"/KEK.pem \
+    db \
+    "$CERT_DIR"/esl/db_"$OEM_NAME".esl \
+    "$CERT_DIR"/auth/db_"$OEM_NAME".auth || error_exit "Failed to create db_$OEM_NAME.auth"
+
+    #### Convert backed up Microsoft KEK Keys ####
+
+    if [ ${#KEK_MICROSOFT_LISTS[@]} -gt 0 ]; then
+        info_msg "Converting Microsoft KEK keys..."
+        rm -f "$CERT_DIR"/esl/KEK_MS.esl  # Start fresh
+
+        for index in "${KEK_MICROSOFT_LISTS[@]}"; do
+            if [ -f "$CERT_DIR/extract/KEK-$index.der" ]; then
+                info_msg "Processing Microsoft KEK key at index $index"
+                openssl x509 -noout -subject -dates -inform DER -in "$CERT_DIR/extract/KEK-$index.der" || error_exit "Failed to read Microsoft KEK certificate at index $index"
+
+                # Create individual ESL for this Microsoft KEK
+                sbsiglist --type x509 \
+                --owner "$MS_GUID" \
+                "$CERT_DIR/extract/KEK-$index.der" \
+                --output "$CERT_DIR/esl/KEK_MS_$index.esl" || error_exit "Failed to create KEK_MS_$index.esl"
+
+                # Append to combined ESL
+                cat "$CERT_DIR/esl/KEK_MS_$index.esl" >> "$CERT_DIR/esl/KEK_MS.esl"
+            else
+                warning_msg "Microsoft KEK certificate not found: $CERT_DIR/extract/KEK-$index.der"
+            fi
+        done
+
+        # Create combined AUTH file for Microsoft KEK
+        if [ -f "$CERT_DIR/esl/KEK_MS.esl" ]; then
+            sign-efi-sig-list -a -g "$MS_GUID" \
+            -t "$(date +'%F %T')" \
+            -k "$CERT_DIR/PK.key" -c "$CERT_DIR/PK.pem" \
+            KEK \
+            "$CERT_DIR/esl/KEK_MS.esl" \
+            "$CERT_DIR/auth/KEK_MS.auth" || error_exit "Failed to create KEK_MS.auth"
+        fi
+    else
+        warning_msg "No Microsoft KEK keys found to convert"
+    fi
+
+    #### Convert backed up Microsoft db Keys ####
+
+    if [ ${#DB_MICROSOFT_LISTS[@]} -gt 0 ]; then
+        info_msg "Converting Microsoft db keys..."
+        rm -f "$CERT_DIR"/esl/db_MS.esl  # Start fresh
+
+        for index in "${DB_MICROSOFT_LISTS[@]}"; do
+            if [ -f "$CERT_DIR/extract/db-$index.der" ]; then
+                info_msg "Processing Microsoft db key at index $index"
+                openssl x509 -noout -subject -dates -inform DER -in "$CERT_DIR/extract/db-$index.der" || error_exit "Failed to read Microsoft db certificate at index $index"
+
+                # Create individual ESL for this Microsoft db
+                sbsiglist --type x509 \
+                --owner "$MS_GUID" \
+                "$CERT_DIR/extract/db-$index.der" \
+                --output "$CERT_DIR/esl/db_MS_$index.esl" || error_exit "Failed to create db_MS_$index.esl"
+
+                # Append to combined ESL
+                cat "$CERT_DIR/esl/db_MS_$index.esl" >> "$CERT_DIR/esl/db_MS.esl"
+            else
+                warning_msg "Microsoft db certificate not found: $CERT_DIR/extract/db-$index.der"
+            fi
+        done
+
+        # Create combined AUTH file for Microsoft db
+        if [ -f "$CERT_DIR/esl/db_MS.esl" ]; then
+            sign-efi-sig-list -a -g "$MS_GUID" \
+            -t "$(date +'%F %T')" \
+            -k "$CERT_DIR/KEK.key" -c "$CERT_DIR/KEK.pem" \
+            db \
+            "$CERT_DIR/esl/db_MS.esl" \
+            "$CERT_DIR/auth/db_MS.auth" || error_exit "Failed to create db_MS.auth"
+        fi
+    else
+        warning_msg "No Microsoft db keys found to convert"
+    fi
+
+    #### Convert backed up Microsoft dbx Keys ####
+
+    if [ -f "$CERT_DIR/bak/dbx-original.esl" ]; then
+        info_msg "Converting Microsoft dbx keys..."
+        sign-efi-sig-list -a -g "$MS_GUID" \
+        -t "$(date +'%F %T')" \
+        -k "$CERT_DIR/KEK.key" -c "$CERT_DIR/KEK.pem" \
+        dbx \
+        "$CERT_DIR/bak/dbx-original.esl" \
+        "$CERT_DIR/auth/dbx_MS.auth" || error_exit "Failed to create dbx_MS.auth"
+    else
+        warning_msg "No dbx backup found. Skipping dbx."
+    fi
+
+    # List files
+    ls -l "$CERT_DIR"/esl/
+    ls -l "$CERT_DIR"/auth/
+    ls -l "$CERT_DIR"/extract/
+
+    CONVERT_DONE=1
+    echo "CONVERT_DONE=1" >> "$CERT_DIR"/.config
+    success_msg "Certificate conversion completed successfully."
+}
+
+sign(){
+    info_msg "Signing bootloader and kernel..."
+
+    # Check if keys were generated
+    if [ $MKCERT_DONE -eq 0 ]; then
+        error_exit "Keys not generated. Run mkcert first."
+    fi
+
+    # Sign the bootloader with our key
+    if [ -f "$BOOTLOADER" ]; then
+        sbsign "$BOOTLOADER" \
+        --key "$CERT_DIR"/db.key --cert "$CERT_DIR"/db.pem \
+        --output "$BOOTLOADER" || error_exit "Failed to sign bootloader"
+
+        # Show the signature of bootloader
+        info_msg "Bootloader signature:"
+        pesign -S -i "$BOOTLOADER" || warning_msg "Failed to verify bootloader signature"
+    else
+        error_exit "Bootloader not found at $BOOTLOADER"
+    fi
+
+        info_msg "Signing current kernel..."
+
+    if [ ! -f "$KERNEL_IMAGE" ]; then
+        error_exit "Kernel image not found: $KERNEL_IMAGE"
+    fi
+
+    # Sign the new kernel
+    sbsign "$KERNEL_IMAGE" \
+    --key "$CERT_DIR"/db.key --cert "$CERT_DIR"/db.pem \
+    --output "$KERNEL_IMAGE" || error_exit "Failed to sign current kernel"
+
+    # Verify signature
+    info_msg "Kernel signature:"
+    pesign -S -i "$KERNEL_IMAGE" || warning_msg "Failed to verify kernel signature"
+
+    SIGN_DONE=1
+    echo "SIGN_DONE=1" >> "$CERT_DIR"/.config
+    success_msg "Signing completed successfully."
+}
+
+enroll(){
+    info_msg "Enrolling created keys into Secure Boot..."
+
+    # Check if certificates were converted
+    if [ $CONVERT_DONE -eq 0 ]; then
+        error_exit "Certificates not converted. Run convert first."
+    fi
+
+    # Make EFI variables mutable
+    chattr -i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
+
+    # Enroll our keys
+    efi-updatevar -f "$CERT_DIR"/auth/db.auth db || error_exit "Failed to enroll db key"
+    efi-updatevar -f "$CERT_DIR"/auth/KEK.auth KEK || error_exit "Failed to enroll KEK key"
+    efi-updatevar -f "$CERT_DIR"/auth/PK.auth PK || error_exit "Failed to enroll PK key"
+
+    # Make EFI variables immutable
+    chattr +i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
+
+    ENROLL_DONE=1
+    echo "ENROLL_DONE=1" >> "$CERT_DIR"/.config
+    success_msg "Key enrollment completed successfully."
+}
+
+enroll_oem(){
+    info_msg "Enrolling OEM keys into Secure Boot..."
+
+    # Check if certificates were converted
+    if [ $CONVERT_DONE -eq 0 ]; then
+        error_exit "Certificates not converted. Run convert first."
+    fi
+
+    # Make EFI variables mutable
+    chattr -i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
+
+    # Enroll OEM KEK key
+    efi-updatevar -a -f "$CERT_DIR"/auth/KEK_"$OEM_NAME".auth KEK || error_exit "Failed to enroll OEM KEK key"
+
+    # Enroll OEM db key
+    efi-updatevar -a -f "$CERT_DIR"/auth/db_"$OEM_NAME".auth db || error_exit "Failed to enroll OEM db key"
+
+    # Make EFI variables immutable
+    chattr +i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
+
+    ENROLL_OEM_DONE=1
+    echo "ENROLL_OEM_DONE=1" >> "$CERT_DIR"/.config
+    success_msg "OEM key enrollment completed successfully."
+}
+
+enroll_ms(){
+    info_msg "Enrolling Microsoft keys into Secure Boot..."
+
+    # Check if certificates were converted
+    if [ $CONVERT_DONE -eq 0 ]; then
+        error_exit "Certificates not converted. Run convert first."
+    fi
+
+    # Enroll Microsoft keys
+
+    # Make EFI variables mutable
+    chattr -i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
+
+    # Enroll Microsoft keys
+    info_msg "Enrolling Microsoft keys..."
+    efi-updatevar -a -f "$CERT_DIR"/auth/KEK_MS.auth KEK || error_exit "Failed to enroll Microsoft KEK key"
+    efi-updatevar -a -f "$CERT_DIR"/auth/db_MS.auth db || error_exit "Failed to enroll Microsoft db key"
+    #efi-updatevar -f "$CERT_DIR"/auth/dbx_MS.auth dbx || warning_msg "Failed to enroll Microsoft dbx key"
+
+    # Make EFI variables immutable
+    chattr +i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
+
+    ENROLL_MS_DONE=1
+    echo "ENROLL_MS_DONE=1" >> "$CERT_DIR"/.config
+    success_msg "Microsoft key enrollment completed successfully."
+}
