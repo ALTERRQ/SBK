@@ -107,8 +107,8 @@ distinguished_name   = my_dist_name
 x509_extensions      = my_x509_exts
 
 [ my_dist_name ]
-commonName           = Prototype PK
-emailAddress         = alterrq@gmail.com
+commonName           = SBK PK
+emailAddress         = github.com/ALTERRQ/SBK
 
 [ my_x509_exts ]
 keyUsage             = digitalSignature
@@ -142,18 +142,18 @@ mkcert(){
 
     # Create Platform Key
     openssl req -x509 -sha256 -days 5490 -outform PEM \
-    -config "$CERT_DIR"/cfg/PK.cfg \
-    -keyout "$CERT_DIR"/PK.key -out "$CERT_DIR"/PK.pem || error_exit "Failed to generate PK"
+        -config "$CERT_DIR"/cfg/PK.cfg \
+        -keyout "$CERT_DIR"/PK.key -out "$CERT_DIR"/PK.pem || error_exit "Failed to generate PK"
 
     # Create Key Exchange Key
     openssl req -x509 -sha256 -days 5490 -outform PEM \
-    -config "$CERT_DIR"/cfg/KEK.cfg \
-    -keyout "$CERT_DIR"/KEK.key -out "$CERT_DIR"/KEK.pem || error_exit "Failed to generate KEK"
+        -config "$CERT_DIR"/cfg/KEK.cfg \
+        -keyout "$CERT_DIR"/KEK.key -out "$CERT_DIR"/KEK.pem || error_exit "Failed to generate KEK"
 
     # Create Signature Database
     openssl req -x509 -sha256 -days 5490 -outform PEM \
-    -config "$CERT_DIR"/cfg/db.cfg \
-    -keyout "$CERT_DIR"/db.key -out "$CERT_DIR"/db.pem || error_exit "Failed to generate db"
+        -config "$CERT_DIR"/cfg/db.cfg \
+        -keyout "$CERT_DIR"/db.key -out "$CERT_DIR"/db.pem || error_exit "Failed to generate db"
 
     # Check keys
     ls -l "$CERT_DIR"/*.pem "$CERT_DIR"/*.key
@@ -187,36 +187,36 @@ convert(){
 
     # Create PK ESL file
     cert-to-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
-    "$CERT_DIR"/PK.pem "$CERT_DIR"/esl/PK.esl || error_exit "Failed to create PK.esl"
+        "$CERT_DIR"/PK.pem "$CERT_DIR"/esl/PK.esl || error_exit "Failed to create PK.esl"
 
     # Create PK AUTH file
     sign-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
-    -t "$(date +'%F %T')" \
-    -c "$CERT_DIR"/PK.pem -k "$CERT_DIR"/PK.key \
-    PK \
-    "$CERT_DIR"/esl/PK.esl "$CERT_DIR"/auth/PK.auth || error_exit "Failed to create PK.auth"
+        -t "$(date +'%F %T')" \
+        -c "$CERT_DIR"/PK.pem -k "$CERT_DIR"/PK.key \
+        PK \
+        "$CERT_DIR"/esl/PK.esl "$CERT_DIR"/auth/PK.auth || error_exit "Failed to create PK.auth"
 
     # Create a KEK ESL file
     cert-to-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
-    "$CERT_DIR"/KEK.pem "$CERT_DIR"/esl/KEK.esl || error_exit "Failed to create KEK.esl"
+        "$CERT_DIR"/KEK.pem "$CERT_DIR"/esl/KEK.esl || error_exit "Failed to create KEK.esl"
 
     # Create a KEK AUTH file
     sign-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
-    -t "$(date +'%F %T')" \
-    -c "$CERT_DIR"/PK.pem -k "$CERT_DIR"/PK.key \
-    KEK \
-    "$CERT_DIR"/esl/KEK.esl "$CERT_DIR"/auth/KEK.auth || error_exit "Failed to create KEK.auth"
+        -t "$(date +'%F %T')" \
+        -c "$CERT_DIR"/PK.pem -k "$CERT_DIR"/PK.key \
+        KEK \
+        "$CERT_DIR"/esl/KEK.esl "$CERT_DIR"/auth/KEK.auth || error_exit "Failed to create KEK.auth"
 
     # Create a db ESL file
     cert-to-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
-    "$CERT_DIR"/db.pem "$CERT_DIR"/esl/db.esl || error_exit "Failed to create db.esl"
+        "$CERT_DIR"/db.pem "$CERT_DIR"/esl/db.esl || error_exit "Failed to create db.esl"
 
     # Create a db AUTH file
     sign-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
-    -t "$(date +'%F %T')" \
-    -c "$CERT_DIR"/KEK.pem -k "$CERT_DIR"/KEK.key \
-    db \
-    "$CERT_DIR"/esl/db.esl "$CERT_DIR"/auth/db.auth || error_exit "Failed to create db.auth"
+        -t "$(date +'%F %T')" \
+        -c "$CERT_DIR"/KEK.pem -k "$CERT_DIR"/KEK.key \
+        db \
+        "$CERT_DIR"/esl/db.esl "$CERT_DIR"/auth/db.auth || error_exit "Failed to create db.auth"
 
     # Convert db.pem to db.der
     openssl x509 -in "$CERT_DIR/db.pem" -out "$CERT_DIR/db.der" -outform der
@@ -235,17 +235,17 @@ convert(){
 
     # Create a KEK ESL file
     sbsiglist --type x509 \
-    --owner "$OEM_GUID" \
-    "$CERT_DIR"/extract/KEK-"$KEK_NUM".der \
-    --output "$CERT_DIR"/esl/KEK_"$OEM_NAME".esl || error_exit "Failed to create KEK_$OEM_NAME.esl"
+        --owner "$OEM_GUID" \
+        "$CERT_DIR"/extract/KEK-"$KEK_NUM".der \
+        --output "$CERT_DIR"/esl/KEK_"$OEM_NAME".esl || error_exit "Failed to create KEK_$OEM_NAME.esl"
 
     # Create a KEK AUTH file
     sign-efi-sig-list -a -g "$OEM_GUID" \
-    -t "$(date +'%F %T')" \
-    -k "$CERT_DIR"/PK.key -c "$CERT_DIR"/PK.pem \
-    KEK \
-    "$CERT_DIR"/esl/KEK_"$OEM_NAME".esl \
-    "$CERT_DIR"/auth/KEK_"$OEM_NAME".auth || error_exit "Failed to create KEK_$OEM_NAME.auth"
+        -t "$(date +'%F %T')" \
+        -k "$CERT_DIR"/PK.key -c "$CERT_DIR"/PK.pem \
+        KEK \
+        "$CERT_DIR"/esl/KEK_"$OEM_NAME".esl \
+        "$CERT_DIR"/auth/KEK_"$OEM_NAME".auth || error_exit "Failed to create KEK_$OEM_NAME.auth"
 
     # Convert backed up OEM db Key
 
@@ -256,17 +256,17 @@ convert(){
 
     # Create a db ESL file
     sbsiglist --type x509 \
-    --owner "$OEM_GUID" \
-    "$CERT_DIR"/extract/db-"$db_NUM".der \
-    --output "$CERT_DIR"/esl/db_"$OEM_NAME".esl || error_exit "Failed to create db_$OEM_NAME.esl"
+        --owner "$OEM_GUID" \
+        "$CERT_DIR"/extract/db-"$db_NUM".der \
+        --output "$CERT_DIR"/esl/db_"$OEM_NAME".esl || error_exit "Failed to create db_$OEM_NAME.esl"
 
     # Create a db AUTH file
     sign-efi-sig-list -a -g "$OEM_GUID" \
-    -t "$(date +'%F %T')" \
-    -k "$CERT_DIR"/KEK.key -c "$CERT_DIR"/KEK.pem \
-    db \
-    "$CERT_DIR"/esl/db_"$OEM_NAME".esl \
-    "$CERT_DIR"/auth/db_"$OEM_NAME".auth || error_exit "Failed to create db_$OEM_NAME.auth"
+        -t "$(date +'%F %T')" \
+        -k "$CERT_DIR"/KEK.key -c "$CERT_DIR"/KEK.pem \
+        db \
+        "$CERT_DIR"/esl/db_"$OEM_NAME".esl \
+        "$CERT_DIR"/auth/db_"$OEM_NAME".auth || error_exit "Failed to create db_$OEM_NAME.auth"
 
     #### Convert backed up Microsoft KEK Keys ####
 
@@ -281,9 +281,9 @@ convert(){
 
                 # Create individual ESL for this Microsoft KEK
                 sbsiglist --type x509 \
-                --owner "$MS_GUID" \
-                "$CERT_DIR/extract/KEK-$index.der" \
-                --output "$CERT_DIR/esl/KEK_MS_$index.esl" || error_exit "Failed to create KEK_MS_$index.esl"
+                    --owner "$MS_GUID" \
+                    "$CERT_DIR/extract/KEK-$index.der" \
+                    --output "$CERT_DIR/esl/KEK_MS_$index.esl" || error_exit "Failed to create KEK_MS_$index.esl"
 
                 # Append to combined ESL
                 cat "$CERT_DIR/esl/KEK_MS_$index.esl" >> "$CERT_DIR/esl/KEK_MS.esl"
@@ -295,11 +295,11 @@ convert(){
         # Create combined AUTH file for Microsoft KEK
         if [ -f "$CERT_DIR/esl/KEK_MS.esl" ]; then
             sign-efi-sig-list -a -g "$MS_GUID" \
-            -t "$(date +'%F %T')" \
-            -k "$CERT_DIR/PK.key" -c "$CERT_DIR/PK.pem" \
-            KEK \
-            "$CERT_DIR/esl/KEK_MS.esl" \
-            "$CERT_DIR/auth/KEK_MS.auth" || error_exit "Failed to create KEK_MS.auth"
+                -t "$(date +'%F %T')" \
+                -k "$CERT_DIR/PK.key" -c "$CERT_DIR/PK.pem" \
+                KEK \
+                "$CERT_DIR/esl/KEK_MS.esl" \
+                "$CERT_DIR/auth/KEK_MS.auth" || error_exit "Failed to create KEK_MS.auth"
         fi
     else
         warning_msg "No Microsoft KEK keys found to convert"
@@ -318,9 +318,9 @@ convert(){
 
                 # Create individual ESL for this Microsoft db
                 sbsiglist --type x509 \
-                --owner "$MS_GUID" \
-                "$CERT_DIR/extract/db-$index.der" \
-                --output "$CERT_DIR/esl/db_MS_$index.esl" || error_exit "Failed to create db_MS_$index.esl"
+                    --owner "$MS_GUID" \
+                    "$CERT_DIR/extract/db-$index.der" \
+                    --output "$CERT_DIR/esl/db_MS_$index.esl" || error_exit "Failed to create db_MS_$index.esl"
 
                 # Append to combined ESL
                 cat "$CERT_DIR/esl/db_MS_$index.esl" >> "$CERT_DIR/esl/db_MS.esl"
@@ -332,11 +332,11 @@ convert(){
         # Create combined AUTH file for Microsoft db
         if [ -f "$CERT_DIR/esl/db_MS.esl" ]; then
             sign-efi-sig-list -a -g "$MS_GUID" \
-            -t "$(date +'%F %T')" \
-            -k "$CERT_DIR/KEK.key" -c "$CERT_DIR/KEK.pem" \
-            db \
-            "$CERT_DIR/esl/db_MS.esl" \
-            "$CERT_DIR/auth/db_MS.auth" || error_exit "Failed to create db_MS.auth"
+                -t "$(date +'%F %T')" \
+                -k "$CERT_DIR/KEK.key" -c "$CERT_DIR/KEK.pem" \
+                db \
+                "$CERT_DIR/esl/db_MS.esl" \
+                "$CERT_DIR/auth/db_MS.auth" || error_exit "Failed to create db_MS.auth"
         fi
     else
         warning_msg "No Microsoft db keys found to convert"
@@ -347,11 +347,11 @@ convert(){
     if [ -f "$CERT_DIR/bak/dbx-original.esl" ]; then
         info_msg "Converting Microsoft dbx keys..."
         sign-efi-sig-list -a -g "$MS_GUID" \
-        -t "$(date +'%F %T')" \
-        -k "$CERT_DIR/KEK.key" -c "$CERT_DIR/KEK.pem" \
-        dbx \
-        "$CERT_DIR/bak/dbx-original.esl" \
-        "$CERT_DIR/auth/dbx_MS.auth" || error_exit "Failed to create dbx_MS.auth"
+            -t "$(date +'%F %T')" \
+            -k "$CERT_DIR/KEK.key" -c "$CERT_DIR/KEK.pem" \
+            dbx \
+            "$CERT_DIR/bak/dbx-original.esl" \
+            "$CERT_DIR/auth/dbx_MS.auth" || error_exit "Failed to create dbx_MS.auth"
     else
         warning_msg "No dbx backup found. Skipping dbx."
     fi
@@ -371,8 +371,8 @@ sign_grub() {
 
     if [ -f "$BOOTLOADER" ]; then
         sbsign "$BOOTLOADER" \
-        --key "$CERT_DIR"/db.key --cert "$CERT_DIR"/db.pem \
-        --output "$BOOTLOADER" || error_exit "Failed to sign bootloader"
+            --key "$CERT_DIR"/db.key --cert "$CERT_DIR"/db.pem \
+            --output "$BOOTLOADER" || error_exit "Failed to sign bootloader"
 
         # Show the signature of bootloader
         info_msg "Bootloader signature:"
@@ -396,8 +396,8 @@ sign_kernel() {
 
     # Sign the kernel
     sbsign "$kernel_image" \
-    --key "$CERT_DIR"/db.key --cert "$CERT_DIR"/db.pem \
-    --output "$kernel_image" || error_exit "Failed to sign kernel $kernel_version"
+        --key "$CERT_DIR"/db.key --cert "$CERT_DIR"/db.pem \
+        --output "$kernel_image" || error_exit "Failed to sign kernel $kernel_version"
 
     # Verify signature
     info_msg "Kernel signature for $kernel_version:"
@@ -595,6 +595,59 @@ auto_sign() {
     success_msg "Automatic signing completed."
 }
 
+dkms_sign(){
+    info_msg "Enabling DKMS automatic signing..."
+
+    # Configure framework.conf
+    if ! grep -q "mok_signing_key=$CERT_DIR/db.priv" /etc/dkms/framework.conf; then
+        echo "mok_signing_key=$CERT_DIR/db.priv" >> /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
+    fi
+    if ! grep -q "mok_certificate=$CERT_DIR/db.der" /etc/dkms/framework.conf; then
+        echo "mok_certificate=$CERT_DIR/db.der" >> /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
+    fi
+
+    success_msg "Enabled DKMS automatic signing successfully"
+
+    info_msg "Rebuilding modules to sign them:"
+
+    # Determine installed modules
+    dkms_modules=$(dkms status 2>/dev/null | sed -n 's/^\([^\/]*\)\/\([^,]*\),.*/\1\/\2/p' | sort -u)
+
+    info_msg "Found module(s): $dkms_modules"
+
+    if [ -z "$dkms_modules" ]; then
+        warning_msg "No DKMS dkms_modules found to rebuild"
+        return 0
+    fi
+
+    local rebuild_errors=0
+    local module_count=0
+
+    for module in $dkms_modules; do
+        ((module_count++))
+        info_msg "[$module_count/$(echo "$dkms_modules" | wc -w)] Rebuilding module: $module"
+
+        if dkms build "$module" --force; then
+            success_msg "Successfully rebuilt $module"
+            if dkms install "$module" --force; then
+                success_msg "Successfully reinstalled $module"
+            else
+                warning_msg "Failed to reinstall $module"
+                ((rebuild_errors++))
+            fi
+        else
+            warning_msg "  Failed to rebuild $module"
+            ((rebuild_errors++))
+        fi
+    done
+
+    if [ $rebuild_errors -eq 0 ]; then
+        success_msg "DKMS signing completed successfully"
+    else
+        warning_msg "DKMS signing completed with $rebuild_errors errors"
+    fi
+}
+
 enroll(){
     info_msg "Enrolling created keys into Secure Boot..."
 
@@ -669,57 +722,4 @@ enroll_ms(){
     ENROLL_MS_DONE=1
     echo "ENROLL_MS_DONE=1" >> "$CERT_DIR"/.config
     success_msg "Microsoft key enrollment completed successfully."
-}
-
-dkms_sign(){
-    info_msg "Enabling DKMS automatic signing..."
-
-    # Configure framework.conf
-    if ! grep -q "mok_signing_key=$CERT_DIR/db.priv" /etc/dkms/framework.conf; then
-        echo "mok_signing_key=$CERT_DIR/db.priv" >> /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
-    fi
-    if ! grep -q "mok_certificate=$CERT_DIR/db.der" /etc/dkms/framework.conf; then
-        echo "mok_certificate=$CERT_DIR/db.der" >> /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
-    fi
-
-    success_msg "Enabled DKMS automatic signing successfully"
-
-    info_msg "Rebuilding modules to sign them:"
-
-    # Determine installed modules
-    dkms_modules=$(dkms status 2>/dev/null | sed -n 's/^\([^\/]*\)\/\([^,]*\),.*/\1\/\2/p' | sort -u)
-
-    info_msg "Found module(s): $dkms_modules"
-
-    if [ -z "$dkms_modules" ]; then
-        warning_msg "No DKMS dkms_modules found to rebuild"
-        return 0
-    fi
-
-    local rebuild_errors=0
-    local module_count=0
-
-    for module in $dkms_modules; do
-        ((module_count++))
-        info_msg "[$module_count/$(echo "$dkms_modules" | wc -w)] Rebuilding module: $module"
-
-        if dkms build "$module" --force; then
-            success_msg "Successfully rebuilt $module"
-            if dkms install "$module" --force; then
-                success_msg "Successfully reinstalled $module"
-            else
-                warning_msg "Failed to reinstall $module"
-                ((rebuild_errors++))
-            fi
-        else
-            warning_msg "  Failed to rebuild $module"
-            ((rebuild_errors++))
-        fi
-    done
-
-    if [ $rebuild_errors -eq 0 ]; then
-        success_msg "DKMS signing completed successfully"
-    else
-        warning_msg "DKMS signing completed with $rebuild_errors errors"
-    fi
 }
