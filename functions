@@ -215,6 +215,12 @@ convert(){
     db \
     "$CERT_DIR"/esl/db.esl "$CERT_DIR"/auth/db.auth || error_exit "Failed to create db.auth"
 
+    # Convert db.pem to db.der
+    openssl x509 -in "$CERT_DIR/db.pem" -out "$CERT_DIR/db.der" -outform der
+
+    # Convert db.key to db.priv
+    cp "$CERT_DIR"/db.key "$CERT_DIR"/db.priv
+
     ####Convert backed up Keys####
 
     # Convert backed up OEM KEK Key
@@ -472,4 +478,57 @@ enroll_ms(){
     ENROLL_MS_DONE=1
     echo "ENROLL_MS_DONE=1" >> "$CERT_DIR"/.config
     success_msg "Microsoft key enrollment completed successfully."
+}
+
+dkms_sign(){
+    info_msg "Enabling DKMS automatic signing..."
+
+    # Configure framework.conf
+    if ! grep -q "mok_signing_key=$CERT_DIR/db.priv" /etc/dkms/framework.conf; then
+        echo "mok_signing_key=$CERT_DIR/db.priv" >> /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
+    fi
+    if ! grep -q "mok_certificate=$CERT_DIR/db.der" /etc/dkms/framework.conf; then
+        echo "mok_certificate=$CERT_DIR/db.der" >> /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
+    fi
+
+    success_msg "Enabled DKMS automatic signing successfully"
+
+    info_msg "Rebuilding modules to sign them:"
+
+    # Determine installed modules
+    dkms_modules=$(dkms status 2>/dev/null | sed -n 's/^\([^\/]*\)\/\([^,]*\),.*/\1\/\2/p' | sort -u)
+
+    info_msg "Found module(s): $dkms_modules"
+
+    if [ -z "$dkms_modules" ]; then
+        warning_msg "No DKMS dkms_modules found to rebuild"
+        return 0
+    fi
+
+    local rebuild_errors=0
+    local module_count=0
+
+    for module in $dkms_modules; do
+        ((module_count++))
+        info_msg "[$module_count/$(echo "$dkms_modules" | wc -w)] Rebuilding module: $module"
+
+        if dkms build "$module" --force; then
+            success_msg "Successfully rebuilt $module"
+            if dkms install "$module" --force; then
+                success_msg "Successfully reinstalled $module"
+            else
+                warning_msg "Failed to reinstall $module"
+                ((rebuild_errors++))
+            fi
+        else
+            warning_msg "  Failed to rebuild $module"
+            ((rebuild_errors++))
+        fi
+    done
+
+    if [ $rebuild_errors -eq 0 ]; then
+        success_msg "DKMS signing completed successfully"
+    else
+        warning_msg "DKMS signing completed with $rebuild_errors errors"
+    fi
 }

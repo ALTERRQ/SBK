@@ -33,7 +33,7 @@ warning_msg() {
     echo -e "${ORANGE}[WARNING] $1${ENDCOLOR}"
 }
 
-# Some variables
+# Determine some variables
 CERT_DIR=/root/secureboot
 BOOTLOADER=/boot/efi/EFI/kali/grubx64.efi
 KERNEL_VERSION=$(uname -r)
@@ -73,7 +73,7 @@ if [[ -f "$CERT_DIR/.config" ]]; then
 fi
 
 # Install dependencies
-DEPLIST="openssl efitools sbsigntool pesign uuid-runtime systemd-boot-tools"
+DEPLIST="openssl efitools sbsigntool pesign uuid-runtime systemd-boot-tools dkms"
 if [[ "$DEPS" -eq 0 || ! -f "$CERT_DIR/.config" ]]; then
     sudo apt update
     sudo apt install $DEPLIST -y
@@ -210,6 +210,7 @@ complete_setup_stage2(){
     grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=kali --modules="tpm" --disable-shim-lock || error_exit "Failed to install GRUB for Secure Boot"
     success_msg "Installed GRUB succesfully."
     sign
+    dkms_sign
     enroll
     enroll_oem
     read -rp "Do you want to enroll Microsoft keys (for dualboot with Windows)? [y/N]: " response
@@ -244,12 +245,13 @@ display_menu() {
     echo -e "${GREEN}7. Enroll Microsoft Keys${ENDCOLOR}"
     echo -e "${GREEN}8. Install GRUB for Secure Boot${ENDCOLOR}"
     echo -e "${GREEN}9. Sign Bootloader & Kernel${ENDCOLOR}"
-    echo -e "${PURPLE}10. Reboot to UEFI Settings${ENDCOLOR}"
-    echo -e "${GREEN}11. Restore Backed Up files${ENDCOLOR}"
-    echo -e "${RED}12. Reset Script (Also created keys will be lost!!!)${ENDCOLOR}"
-    echo -e "${RED}13. Exit${ENDCOLOR}"
+    echo -e "${GREEN}10. Sign DKMS${ENDCOLOR}"
+    echo -e "${PURPLE}11. Reboot to UEFI Settings${ENDCOLOR}"
+    echo -e "${GREEN}12. Restore Backed Up files${ENDCOLOR}"
+    echo -e "${RED}13. Reset Script (Also created keys will be lost!!!)${ENDCOLOR}"
+    echo -e "${RED}14. Exit${ENDCOLOR}"
     echo -e "${BLUE}===================================================${ENDCOLOR}"
-    echo -n -e "${BLUE}[*] Enter your choice (1-13): ${ENDCOLOR}"
+    echo -n -e "${BLUE}[*] Enter your choice (1-14): ${ENDCOLOR}"
 }
 
 # Main loop
@@ -313,14 +315,18 @@ while true; do
             read -rp "Press Enter to continue..."
             ;;
         10)
+            dkms_sign
+            read -rp "Press Enter to continue..."
+            ;;
+        11)
             info_msg "Rebooting to UEFI firmware settings..."
             systemctl reboot --firmware-setup
             ;;
-        11)
+        12)
             restore
             read -rp "Press Enter to continue..."
             ;;
-        12)
+        13)
             read -rp "Do you want to reset? [y/N]: " response
             response="${response:-no}"
             if [[ "${response,,}" =~ ^(y|yes)$ ]]; then
@@ -330,7 +336,7 @@ while true; do
             fi
             read -rp "Press Enter to continue..."
             ;;
-        13)
+        14)
             info_msg "Exiting..."
             exit 0
             ;;
