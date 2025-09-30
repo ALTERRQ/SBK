@@ -209,8 +209,10 @@ complete_setup_stage2(){
     info_msg "Installing GRUB for Secure Boot..."
     grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=kali --modules="tpm" --disable-shim-lock || error_exit "Failed to install GRUB for Secure Boot"
     success_msg "Installed GRUB succesfully."
-    sign
+    sign_all_kernels
+    sign_grub
     dkms_sign
+    setup_automatic_signing
     enroll
     enroll_oem
     read -rp "Do you want to enroll Microsoft keys (for dualboot with Windows)? [y/N]: " response
@@ -244,14 +246,18 @@ display_menu() {
     echo -e "${GREEN}6. Enroll Created and OEM Keys${ENDCOLOR}"
     echo -e "${GREEN}7. Enroll Microsoft Keys${ENDCOLOR}"
     echo -e "${GREEN}8. Install GRUB for Secure Boot${ENDCOLOR}"
-    echo -e "${GREEN}9. Sign Bootloader & Kernel${ENDCOLOR}"
-    echo -e "${GREEN}10. Sign DKMS${ENDCOLOR}"
-    echo -e "${PURPLE}11. Reboot to UEFI Settings${ENDCOLOR}"
-    echo -e "${GREEN}12. Restore Backed Up files${ENDCOLOR}"
-    echo -e "${RED}13. Reset Script (Also created keys will be lost!!!)${ENDCOLOR}"
-    echo -e "${RED}14. Exit${ENDCOLOR}"
+    echo -e "${GREEN}9. Sign GRUB Bootloader${ENDCOLOR}"
+    echo -e "${GREEN}10. Sign All Kernels${ENDCOLOR}"
+    echo -e "${GREEN}11. Setup Automatic Signing${ENDCOLOR}"
+    echo -e "${GREEN}12. Remove Automatic Signing${ENDCOLOR}"
+    echo -e "${GREEN}13. Run Automatic Signing Now${ENDCOLOR}"
+    echo -e "${GREEN}14. Sign DKMS${ENDCOLOR}"
+    echo -e "${PURPLE}15. Reboot to UEFI Settings${ENDCOLOR}"
+    echo -e "${GREEN}16. Restore Backed Up files${ENDCOLOR}"
+    echo -e "${RED}17. Reset Script (Also created keys will be lost!!!)${ENDCOLOR}"
+    echo -e "${RED}18. Exit${ENDCOLOR}"
     echo -e "${BLUE}===================================================${ENDCOLOR}"
-    echo -n -e "${BLUE}[*] Enter your choice (1-14): ${ENDCOLOR}"
+    echo -n -e "${BLUE}[*] Enter your choice (1-18): ${ENDCOLOR}"
 }
 
 # Main loop
@@ -311,22 +317,38 @@ while true; do
             read -rp "Press Enter to continue..."
             ;;
         9)
-            sign
+            sign_grub
             read -rp "Press Enter to continue..."
             ;;
         10)
-            dkms_sign
+            sign_all_kernels
             read -rp "Press Enter to continue..."
             ;;
         11)
-            info_msg "Rebooting to UEFI firmware settings..."
-            systemctl reboot --firmware-setup
+            setup_automatic_signing
+            read -rp "Press Enter to continue..."
             ;;
         12)
-            restore
+            remove_automatic_signing
             read -rp "Press Enter to continue..."
             ;;
         13)
+            auto_sign
+            read -rp "Press Enter to continue..."
+            ;;
+        14)
+            dkms_sign
+            read -rp "Press Enter to continue..."
+            ;;
+        15)
+            info_msg "Rebooting to UEFI firmware settings..."
+            systemctl reboot --firmware-setup
+            ;;
+        16)
+            restore
+            read -rp "Press Enter to continue..."
+            ;;
+        17)
             read -rp "Do you want to reset? [y/N]: " response
             response="${response:-no}"
             if [[ "${response,,}" =~ ^(y|yes)$ ]]; then
@@ -336,7 +358,7 @@ while true; do
             fi
             read -rp "Press Enter to continue..."
             ;;
-        14)
+        18)
             info_msg "Exiting..."
             exit 0
             ;;

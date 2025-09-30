@@ -6,6 +6,9 @@
 reset(){
     info_msg "Resetting script!"
 
+    # Remove automatic signing
+    remove_automatic_signing
+
     # Delete script files
     rm -fr "$CERT_DIR"
 
@@ -363,15 +366,9 @@ convert(){
     success_msg "Certificate conversion completed successfully."
 }
 
-sign(){
-    info_msg "Signing bootloader and kernel..."
+sign_grub() {
+    info_msg "Signing GRUB bootloader..."
 
-    # Check if keys were generated
-    if [ $MKCERT_DONE -eq 0 ]; then
-        error_exit "Keys not generated. Run mkcert first."
-    fi
-
-    # Sign the bootloader with our key
     if [ -f "$BOOTLOADER" ]; then
         sbsign "$BOOTLOADER" \
         --key "$CERT_DIR"/db.key --cert "$CERT_DIR"/db.pem \
@@ -380,28 +377,222 @@ sign(){
         # Show the signature of bootloader
         info_msg "Bootloader signature:"
         pesign -S -i "$BOOTLOADER" || warning_msg "Failed to verify bootloader signature"
+        success_msg "GRUB signed successfully."
     else
         error_exit "Bootloader not found at $BOOTLOADER"
     fi
+}
 
-        info_msg "Signing current kernel..."
+sign_kernel() {
+    local kernel_version="$1"
+    local kernel_image="/boot/vmlinuz-$kernel_version"
 
-    if [ ! -f "$KERNEL_IMAGE" ]; then
-        error_exit "Kernel image not found: $KERNEL_IMAGE"
+    info_msg "Signing kernel: $kernel_version"
+
+    if [ ! -f "$kernel_image" ]; then
+        warning_msg "Kernel image not found: $kernel_image"
+        return 1
     fi
 
-    # Sign the new kernel
-    sbsign "$KERNEL_IMAGE" \
+    # Sign the kernel
+    sbsign "$kernel_image" \
     --key "$CERT_DIR"/db.key --cert "$CERT_DIR"/db.pem \
-    --output "$KERNEL_IMAGE" || error_exit "Failed to sign current kernel"
+    --output "$kernel_image" || error_exit "Failed to sign kernel $kernel_version"
 
     # Verify signature
-    info_msg "Kernel signature:"
-    pesign -S -i "$KERNEL_IMAGE" || warning_msg "Failed to verify kernel signature"
+    info_msg "Kernel signature for $kernel_version:"
+    pesign -S -i "$kernel_image" || warning_msg "Failed to verify kernel signature"
+    success_msg "Kernel $kernel_version signed successfully."
+}
 
-    SIGN_DONE=1
-    echo "SIGN_DONE=1" >> "$CERT_DIR"/.config
-    success_msg "Signing completed successfully."
+sign_all_kernels() {
+    info_msg "Signing all installed kernels..."
+
+    # Get all installed kernel versions
+    local kernels=$(ls /boot/vmlinuz-* 2>/dev/null | grep -v rescue | sort -V)
+
+    if [ -z "$kernels" ]; then
+        warning_msg "No kernel images found in /boot/"
+        return 1
+    fi
+
+    local signed_count=0
+    for kernel in $kernels; do
+        local kernel_version=$(basename "$kernel" | sed 's/vmlinuz-//')
+        if sign_kernel "$kernel_version"; then
+            ((signed_count++))
+        fi
+    done
+
+    success_msg "Signed $signed_count kernel(s) successfully."
+}
+
+setup_automatic_signing() {
+    info_msg "Setting up automatic signing hooks..."
+
+    # Create hooks directory if it doesn't exist
+    local hooks_dir="/etc/kernel/postinst.d"
+    local grub_hooks_dir="/etc/grub.d/post-install"
+    mkdir -p "$hooks_dir" "$grub_hooks_dir"
+
+    # Create kernel post-install hook
+    cat << 'EOF' > "$hooks_dir/zz-secureboot-sign"
+#!/bin/bash
+# Automatic kernel signing hook for Secure Boot
+
+KERNEL_VERSION="$1"
+CERT_DIR="/root/secureboot"
+
+# Only proceed if Secure Boot setup is complete
+if [ ! -f "$CERT_DIR/.config" ]; then
+    exit 0
+fi
+
+# Source the config
+source "$CERT_DIR/.config" 2>/dev/null || exit 0
+
+# Only proceed if keys are generated
+if [ "$MKCERT_DONE" -ne 1 ]; then
+    exit 0
+fi
+
+# Source functions if available
+[ -f "/root/secureboot/functions.sh" ] && source "/root/secureboot/functions.sh"
+
+# Wait a moment for the kernel installation to complete
+sleep 2
+
+# Sign the newly installed kernel
+if [ -f "/boot/vmlinuz-$KERNEL_VERSION" ]; then
+    echo "Signing kernel $KERNEL_VERSION for Secure Boot..."
+    sbsign "/boot/vmlinuz-$KERNEL_VERSION" \
+        --key "$CERT_DIR/db.key" --cert "$CERT_DIR/db.pem" \
+        --output "/boot/vmlinuz-$KERNEL_VERSION" && \
+    echo "Successfully signed kernel $KERNEL_VERSION"
+fi
+
+# Update GRUB configuration
+if command -v update-grub &> /dev/null; then
+    update-grub
+elif command -v grub-mkconfig &> /dev/null; then
+    grub-mkconfig -o /boot/grub/grub.cfg
+fi
+EOF
+
+    # Create GRUB post-install hook
+    cat << 'EOF' > "$grub_hooks_dir/99-secureboot-sign"
+#!/bin/bash
+# Automatic GRUB signing hook for Secure Boot
+
+CERT_DIR="/root/secureboot"
+
+# Only proceed if Secure Boot setup is complete
+if [ ! -f "$CERT_DIR/.config" ]; then
+    exit 0
+fi
+
+# Source the config
+source "$CERT_DIR/.config" 2>/dev/null || exit 0
+
+# Only proceed if keys are generated
+if [ "$MKCERT_DONE" -ne 1 ]; then
+    exit 0
+fi
+
+# Wait a moment for GRUB installation to complete
+sleep 2
+
+# Sign GRUB
+BOOTLOADER="/boot/efi/EFI/kali/grubx64.efi"
+if [ -f "$BOOTLOADER" ]; then
+    echo "Signing GRUB bootloader for Secure Boot..."
+    sbsign "$BOOTLOADER" \
+        --key "$CERT_DIR/db.key" --cert "$CERT_DIR/db.pem" \
+        --output "$BOOTLOADER" && \
+    echo "Successfully signed GRUB bootloader"
+fi
+EOF
+
+    # Make hooks executable
+    chmod +x "$hooks_dir/zz-secureboot-sign"
+    chmod +x "$grub_hooks_dir/99-secureboot-sign"
+
+    # Also create a systemd service for periodic checking
+    cat << 'EOF' > /etc/systemd/system/secureboot-sign.service
+[Unit]
+Description=Secure Boot Automatic Signing
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c ' \
+    if [ -f "/root/secureboot/.config" ]; then \
+        source /root/secureboot/.config; \
+        if [ "$MKCERT_DONE" -eq 1 ]; then \
+            /root/secureboot/sbk.sh auto-sign; \
+        fi; \
+    fi'
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    cat << 'EOF' > /etc/systemd/system/secureboot-sign.timer
+[Unit]
+Description=Secure Boot Automatic Signing Timer
+Requires=secureboot-sign.service
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl enable secureboot-sign.timer
+    systemctl start secureboot-sign.timer
+
+    success_msg "Automatic signing hooks installed successfully."
+}
+
+remove_automatic_signing() {
+    info_msg "Removing automatic signing hooks..."
+
+    rm -f /etc/kernel/postinst.d/zz-secureboot-sign
+    rm -f /etc/grub.d/post-install/99-secureboot-sign
+    systemctl disable secureboot-sign.timer 2>/dev/null || true
+    systemctl stop secureboot-sign.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/secureboot-sign.service
+    rm -f /etc/systemd/system/secureboot-sign.timer
+
+    success_msg "Automatic signing hooks removed successfully."
+}
+
+auto_sign() {
+    info_msg "Running automatic signing check..."
+
+    # Check if Secure Boot setup is complete
+    if [ ! -f "$CERT_DIR/.config" ]; then
+        info_msg "Secure Boot not configured. Skipping automatic signing."
+        return 0
+    fi
+
+    source "$CERT_DIR/.config"
+
+    if [ "$MKCERT_DONE" -ne 1 ]; then
+        info_msg "Keys not generated. Skipping automatic signing."
+        return 0
+    fi
+
+    # Sign GRUB
+    sign_grub
+
+    # Sign all kernels
+    sign_all_kernels
+
+    success_msg "Automatic signing completed."
 }
 
 enroll(){
