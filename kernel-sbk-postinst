@@ -1,0 +1,40 @@
+#!/bin/bash
+
+# CAUTION: this script could be dangerous!!!
+# SBK automatic kernel signing hook for Secure Boot by ALTERRQ
+
+# Determine newly installed kernels version
+KERNEL_VERSION_AUTO="$1"
+
+# Source sbk
+source "/usr/local/bin/sbk" 2>/dev/null || echo "\e[1;31m[ERROR]Failed to source sbk\e[0m" | exit 1
+
+# Source functions
+source "$SBK_HOME/scripts/functions" 2>/dev/null || echo "\e[1;31m[ERROR]Failed to source functions\e[0m" | exit 1
+
+# Source the config
+source "$SBK_HOME/scripts/.config" 2>/dev/null || error_exit "Failed to source .config"
+
+# Only proceed if certs are created
+if [ $MKCERT_DONE -eq 0 ]; then
+    error_exit "Signing failed. Create certificates first."
+fi
+
+# Wait a moment for the kernel installation to complete
+sleep 2
+
+# Sign the newly installed kernel
+if [ -f "/boot/vmlinuz-$KERNEL_VERSION_AUTO" ]; then
+    echo "Signing kernel $KERNEL_VERSION_AUTO for Secure Boot..."
+    sbsign "/boot/vmlinuz-$KERNEL_VERSION_AUTO" \
+        --key "$SBK_HOME/db.key" --cert "$SBK_HOME/db.pem" \
+        --output "/boot/vmlinuz-$KERNEL_VERSION_AUTO" && \
+    echo "Successfully signed kernel $KERNEL_VERSION_AUTO"
+fi
+
+# Update GRUB configuration
+if command -v update-grub &> /dev/null; then
+    update-grub || error_exit "Failed to update GRUB configuration."
+elif command -v grub-mkconfig &> /dev/null; then
+    grub-mkconfig -o /boot/grub/grub.cfg || error_exit "Failed to update GRUB configuration."
+fi

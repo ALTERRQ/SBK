@@ -34,16 +34,14 @@ warning_msg() {
 }
 
 # Determine some variables
-CERT_DIR=/root/secureboot
+SBK_HOME=/root/sbk
 BOOTLOADER=/boot/efi/EFI/kali/grubx64.efi
 KERNEL_VERSION=$(uname -r)
 KERNEL_IMAGE="/boot/vmlinuz-$KERNEL_VERSION"
 MS_GUID=77fa9abd-0359-4d32-bd60-28f4e78f784b
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_FILE="$CERT_DIR/kali-sb.log"
+CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_FILE="$SBK_HOME/sbk.log"
 
-# Source functions.sh
-source "$SCRIPT_DIR/functions"
 
 # Logging
 > "$LOG_FILE"
@@ -60,21 +58,29 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # Create a home for the script in /root
-if [[ ! -d "$CERT_DIR" ]]; then
-    mkdir -vp "$CERT_DIR"/{auth,bak,cfg,esl,extract} > /dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        error_exit "Failed to create $CERT_DIR"
-    fi
+if [[ ! -d "$SBK_HOME" ]]; then
+    info_msg "Creating HOME..."
+    mkdir -vp "$SBK_HOME"/{auth,bak,cfg,esl,extract,scripts} || error_exit "Failed to create $SBK_HOME"
+    success_msg "HOME created successfully."
+
+elif [[ -d "$SBK_HOME/scripts" ]]; then
+    info_msg "Creating HOME..."
+    mkdir -vp "$SBK_HOME"/{auth,bak,cfg,esl,extract} || error_exit "Failed to recreate $SBK_HOME"
+    success_msg "HOME created successfully."
+
+    INSTALLED=1
+    echo "INSTALLED=1" >> "$SBK_HOME"/.config
+    success_msg "Script is already installed."
 fi
 
 # Source .config
-if [[ -f "$CERT_DIR/.config" ]]; then
-    source "$CERT_DIR/.config"
+if [[ -f "$SBK_HOME/.config" ]]; then
+    source "$SBK_HOME/.config" || error_exit "Failed to source .config"
 fi
 
 # Install dependencies
 DEPLIST="openssl efitools sbsigntool pesign uuid-runtime systemd-boot-tools dkms"
-if [[ "$DEPS" -eq 0 || ! -f "$CERT_DIR/.config" ]]; then
+if [[ "$DEPS" -eq 0 || ! -f "$SBK_HOME/.config" ]]; then
     sudo apt update
     sudo apt install $DEPLIST -y
     if [ $? -ne 0 ]; then
@@ -91,96 +97,124 @@ else
 fi
 
 # Determine and save some vars to .config
-if [[ ! -f "$CERT_DIR/.config" ]]; then
+if [[ ! -f "$SBK_HOME/.config" ]]; then
     # Status tracking variables
     BACKUP_DONE=0
     MKCONFIGS_DONE=0
     MKCERT_DONE=0
     CONVERT_DONE=0
-    SIGN_DONE=0
+    SIGN_ALL_KERNELS=0
     ENROLL_DONE=0
     ENROLL_OEM_DONE=0
     ENROLL_MS_DONE=0
+    SETUP_DONE=0
+    INSTALLED=0
 
-# Get OEM name
-OEM_NAME=$(efi-readvar -v PK 2>&1 | grep -m1 "CN=" | awk -F'CN=' '{print $2}' | awk '{print $1}')
-if [ -z "$OEM_NAME" ]; then
-    error_exit "Could not determine OEM name"
-fi
-
-# Get KEK_NUM and OEM_GUID
-KEK_INFO=$(efi-readvar -v KEK 2>&1)
-if [ $? -ne 0 ]; then
-    error_exit "Failed to read KEK variables"
-fi
-
-KEK_NUM=$(echo "$KEK_INFO" | awk -v oem="$OEM_NAME" '
-/^KEK: List/ {gsub(/,/, "", $3); list=$3}
-/CN=/ && $0 ~ oem {print list; exit}')
-
-OEM_GUID=$(echo "$KEK_INFO" | awk -v oem="$OEM_NAME" '
-/owner/ {gsub(/,/, "", $NF); guid=$NF}
-/CN=/ && $0 ~ oem {print guid; exit}')
-
-if [ -z "$KEK_NUM" ]; then
-    error_exit "OEM:'$OEM_NAME' is not found in KEK"
-fi
-
-# Get db_NUM
-DB_INFO=$(efi-readvar -v db 2>&1)
-if [ $? -ne 0 ]; then
-    error_exit "Failed to read db variables"
-fi
-
-db_NUM=$(echo "$DB_INFO" | awk -v oem="$OEM_NAME" '
-/^db: List/ {gsub(/,/, "", $3); list=$3}
-/CN=/ && $0 ~ oem {print list; exit}')
-
-if [ -z "$db_NUM" ]; then
-    error_exit "OEM:'$OEM_NAME' is not found in db"
-fi
-
-# Get Microsoft key list numbers for KEK
-KEK_MICROSOFT_LISTS=$(echo "$KEK_INFO" | awk -v guid="$MS_GUID" '
-/^KEK: List/ {gsub(/,/, "", $3); list=$3}
-/owner/ && $NF ~ guid {print list}')
-
-# Convert to array
-KEK_MICROSOFT_LISTS=($KEK_MICROSOFT_LISTS)
-
-# Get Microsoft key list numbers for db
-DB_MICROSOFT_LISTS=$(echo "$DB_INFO" | awk -v guid="$MS_GUID" '
-/^db: List/ {gsub(/,/, "", $3); list=$3}
-/owner/ && $NF ~ guid {print list}')
-
-# Convert to array
-DB_MICROSOFT_LISTS=($DB_MICROSOFT_LISTS)
-
-# Variables to save to .config
-variables_to_save=(
-    "OEM_NAME"
-    "KEK_NUM"
-    "db_NUM"
-    "OEM_GUID"
-    "DEPS"
-    "KEK_MICROSOFT_LISTS[@]"
-    "DB_MICROSOFT_LISTS[@]"
-)
-
-# Save the vars to .config
-: > "$CERT_DIR/.config" # Clear or create .config file
-for var in "${variables_to_save[@]}"; do
-    if [[ $var == *[@] ]]; then
-        # Handle arrays
-        var_name=${var%[@]}
-        declare -n array_ref="$var_name"
-        echo "${var_name}=(${array_ref[*]})" >> "$CERT_DIR/.config"
-    else
-        # Handle scalars
-        echo "${var}=\"${!var}\"" >> "$CERT_DIR/.config"
+    # Get OEM name
+    OEM_NAME=$(efi-readvar -v PK 2>&1 | grep -m1 "CN=" | awk -F'CN=' '{print $2}' | awk '{print $1}')
+    if [ -z "$OEM_NAME" ]; then
+        error_exit "Could not determine OEM name"
     fi
-done
+
+    # Get KEK_NUM and OEM_GUID
+    KEK_INFO=$(efi-readvar -v KEK 2>&1)
+    if [ $? -ne 0 ]; then
+        error_exit "Failed to read KEK variables"
+    fi
+
+    KEK_NUM=$(echo "$KEK_INFO" | awk -v oem="$OEM_NAME" '
+        /^KEK: List/ {gsub(/,/, "", $3); list=$3}
+        /CN=/ && $0 ~ oem {print list; exit}')
+
+    OEM_GUID=$(echo "$KEK_INFO" | awk -v oem="$OEM_NAME" '
+        /owner/ {gsub(/,/, "", $NF); guid=$NF}
+        /CN=/ && $0 ~ oem {print guid; exit}')
+
+    if [ -z "$KEK_NUM" ]; then
+        error_exit "OEM:'$OEM_NAME' is not found in KEK"
+    fi
+
+    # Get db_NUM
+    DB_INFO=$(efi-readvar -v db 2>&1)
+    if [ $? -ne 0 ]; then
+        error_exit "Failed to read db variables"
+    fi
+
+    db_NUM=$(echo "$DB_INFO" | awk -v oem="$OEM_NAME" '
+        /^db: List/ {gsub(/,/, "", $3); list=$3}
+        /CN=/ && $0 ~ oem {print list; exit}')
+
+    if [ -z "$db_NUM" ]; then
+        error_exit "OEM:'$OEM_NAME' is not found in db"
+    fi
+
+    # Get Microsoft key list numbers for KEK
+    KEK_MICROSOFT_LISTS=$(echo "$KEK_INFO" | awk -v guid="$MS_GUID" '
+    /^KEK: List/ {gsub(/,/, "", $3); list=$3}
+    /owner/ && $NF ~ guid {print list}')
+
+    # Convert to array
+    KEK_MICROSOFT_LISTS=($KEK_MICROSOFT_LISTS)
+
+    # Get Microsoft key list numbers for db
+    DB_MICROSOFT_LISTS=$(echo "$DB_INFO" | awk -v guid="$MS_GUID" '
+        /^db: List/ {gsub(/,/, "", $3); list=$3}
+        /owner/ && $NF ~ guid {print list}')
+
+    # Convert to array
+    DB_MICROSOFT_LISTS=($DB_MICROSOFT_LISTS)
+
+    # Variables to save to .config
+    variables_to_save=(
+        "OEM_NAME"
+        "KEK_NUM"
+        "db_NUM"
+        "OEM_GUID"
+        "DEPS"
+        "KEK_MICROSOFT_LISTS[@]"
+        "DB_MICROSOFT_LISTS[@]"
+    )
+
+    # Save the vars to .config
+    : > "$SBK_HOME/.config" # Clear or create .config file
+    for var in "${variables_to_save[@]}"; do
+        if [[ $var == *[@] ]]; then
+            # Handle arrays
+            var_name=${var%[@]}
+            declare -n array_ref="$var_name"
+            echo "${var_name}=(${array_ref[*]})" >> "$SBK_HOME/.config"
+        else
+            # Handle scalars
+            echo "${var}=\"${!var}\"" >> "$SBK_HOME/.config"
+        fi
+    done
 fi
+
+# "Install" script
+if [ $INSTALLED -eq 0 ]; then
+    info_msg "Installing script..."
+
+    # Copy sbk to /usr/local/bin
+    cp -vf "$CURRENT_DIR/sbk" "/usr/local/bin" || error_exit "Failed to copy sbk to /usr/local/bin"
+
+    # Copy functions to home
+    cp -vf "$CURRENT_DIR/functions" "$SBK_HOME/scripts/functions" || error_exit "Failed to copy functions to SBK_HOME"
+
+    # Copy kernel-sbk-postinst to home
+    cp -vf "$CURRENT_DIR/kernel-sbk-postinst" "$SBK_HOME/scripts/kernel-sbk-postinst" || error_exit "Failed to copy kernel-sbk-postinst to SBK_HOME"
+
+    # Copy grub-sbk-postinst to home
+    cp -vf "$CURRENT_DIR/grub-sbk-postinst" "$SBK_HOME/scripts/grub-sbk-postinst" || error_exit "Failed to copy grub-sbk-postinst to SBK_HOME"
+
+    INSTALLED=1
+    echo "INSTALLED=1" >> "$SBK_HOME"/.config
+    success_msg "Script installed succesfully. To use script run the command: \"sudo sbk\" anywhere."
+    read -rp "Press Enter to continue..."
+    exit 0
+fi
+
+# Source functions
+source "$SBK_HOME/scripts/functions" || error_exit "Failed to source functions"
 
 complete_setup_stage1(){
     info_msg "Starting complete Secure Boot setup..."
@@ -193,7 +227,7 @@ complete_setup_stage1(){
 
     # Signal script to start stage2 in next run
     STAGE_2=1
-    echo "STAGE_2=1" >> "$CERT_DIR"/.config
+    echo "STAGE_2=1" >> "$SBK_HOME"/.config
 
     echo -e "${BLUE}===========================================================${ENDCOLOR}"
     echo -e "${CYAN}[*] Please reboot to UEFI(BIOS) & delete all enrolled keys!${ENDCOLOR}"
@@ -224,6 +258,9 @@ complete_setup_stage2(){
     info_msg "Enrolled keys:"
     efi-readvar
 
+    SETUP_DONE=1
+    echo "SETUP_DONE=1" >> "$SBK_HOME"/.config
+
     echo -e "${BLUE}==============================================${ENDCOLOR}"
     echo -e "${CYAN}##############################################${ENDCOLOR}"
     echo -e "${GREEN}[+] Secure Boot setup completed successfully!${ENDCOLOR}"
@@ -240,17 +277,17 @@ display_menu() {
     echo -e "${BLUE}===================================================${ENDCOLOR}"
     echo -e "${GREEN}1. Complete Secure Boot Setup (Do Everything)${ENDCOLOR}"
     echo -e "${GREEN}2. Get Status${ENDCOLOR}"
-    echo -e "${GREEN}3. Backup Enrolled Keys${ENDCOLOR}"
-    echo -e "${GREEN}4. Create Secure Boot Keys${ENDCOLOR}"
-    echo -e "${GREEN}5. Convert Certificates to Esl & Auth Format${ENDCOLOR}"
-    echo -e "${GREEN}6. Enroll Created and OEM Keys${ENDCOLOR}"
-    echo -e "${GREEN}7. Enroll Microsoft Keys${ENDCOLOR}"
-    echo -e "${GREEN}8. Install GRUB for Secure Boot${ENDCOLOR}"
-    echo -e "${GREEN}9. Sign GRUB Bootloader${ENDCOLOR}"
-    echo -e "${GREEN}10. Sign All Kernels${ENDCOLOR}"
-    echo -e "${GREEN}11. Setup Automatic Signing${ENDCOLOR}"
-    echo -e "${GREEN}12. Remove Automatic Signing${ENDCOLOR}"
-    echo -e "${GREEN}13. Run Automatic Signing Now${ENDCOLOR}"
+    echo -e "${GREEN}3. List Enrolled Keys${ENDCOLOR}"
+    echo -e "${GREEN}4. Backup Enrolled Keys${ENDCOLOR}"
+    echo -e "${GREEN}5. Create Secure Boot Keys${ENDCOLOR}"
+    echo -e "${GREEN}6. Convert Certificates to Esl & Auth Format${ENDCOLOR}"
+    echo -e "${GREEN}7. Enroll Created and OEM Keys${ENDCOLOR}"
+    echo -e "${GREEN}8. Enroll Microsoft Keys${ENDCOLOR}"
+    echo -e "${GREEN}9. Install GRUB for Secure Boot${ENDCOLOR}"
+    echo -e "${GREEN}10. Sign GRUB Bootloader${ENDCOLOR}"
+    echo -e "${GREEN}11. Sign All Kernels${ENDCOLOR}"
+    echo -e "${GREEN}12. Setup Automatic Signing${ENDCOLOR}"
+    echo -e "${GREEN}13. Remove Automatic Signing${ENDCOLOR}"
     echo -e "${GREEN}14. Sign DKMS${ENDCOLOR}"
     echo -e "${PURPLE}15. Reboot to UEFI Settings${ENDCOLOR}"
     echo -e "${GREEN}16. Restore Backed Up files${ENDCOLOR}"
@@ -277,63 +314,60 @@ while true; do
             fi
             ;;
         2)
-            info_msg "Secure Boot status:"
-            bootctl status 2>&1 | grep 'Secure Boot' || warning_msg "Failed to determine secure boot status"
-            echo ""
+            status
+            read -rp "Press Enter to continue..."
+            ;;
+        3)
             info_msg "Enrolled keys:"
             efi-readvar
             read -rp "Press Enter to continue..."
             ;;
-        3)
+        4)
             backup
             read -rp "Press Enter to continue..."
             ;;
-        4)
+        5)
             mkconfigs
             mkcert
             read -rp "Press Enter to continue..."
             ;;
-        5)
+        6)
             convert
             read -rp "Press Enter to continue..."
             ;;
-        6)
+        7)
             enroll
             enroll_oem
             info_msg "Enrolled keys:"
             efi-readvar
             read -rp "Press Enter to continue..."
             ;;
-        7)
+        8)
             enroll_ms
             info_msg "Enrolled keys:"
             efi-readvar
             read -rp "Press Enter to continue..."
             ;;
-        8)
+        9)
             info_msg "Installing GRUB for Secure Boot..."
             grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=kali --modules="tpm" --disable-shim-lock || error_exit "Failed to install GRUB for Secure Boot"
             success_msg "Installed GRUB succesfully."
             read -rp "Press Enter to continue..."
             ;;
-        9)
+        10)
             sign_grub
             read -rp "Press Enter to continue..."
             ;;
-        10)
+        11)
             sign_all_kernels
             read -rp "Press Enter to continue..."
             ;;
-        11)
+        12)
             setup_automatic_signing
             read -rp "Press Enter to continue..."
             ;;
-        12)
-            remove_automatic_signing
-            read -rp "Press Enter to continue..."
-            ;;
         13)
-            auto_sign
+            remove_automatic_signing
             read -rp "Press Enter to continue..."
             ;;
         14)

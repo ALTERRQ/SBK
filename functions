@@ -3,100 +3,92 @@
 # CAUTION: this script could be dangerous!!!
 # SBK functions by ALTERRQ
 
+status(){
+    info_msg "Secure Boot status:"
+    bootctl status 2>&1 | grep 'Secure Boot' || warning_msg "Failed to determine secure boot status"
+
+    info_msg "Script files:"
+    tree "$SBK_HOME"
+
+}
+
 reset(){
     info_msg "Resetting script!"
 
-    # Remove automatic signing
+    # Delete automatic signing scripts
     remove_automatic_signing
 
-    # Delete script files
-    rm -fr "$CERT_DIR"
+    # Delete everything in home except scripts
+    find "$SBK_HOME" -mindepth 1 -maxdepth 1 -not -name "scripts" -exec rm -rf {} + || error_exit "Failed to clean home"
 
-    if [ $? -eq 0 ]; then
-        success_msg "Reset completed successfully."
-        exit 0
-    else
-        error_exit "Failed to reset script files."
-    fi
+    success_msg "Reset completed successfully."
+    exit 0
 }
 
 backup(){
     info_msg "Creating backup of existing keys & files..."
 
-    # Create backup directory if it doesn't exist
-    mkdir -p "$CERT_DIR/bak"
-
     # Backup currently enrolled certs
-    efi-readvar > "$CERT_DIR"/bak/all-efi-keys-original.txt || error_exit "Failed to backup all-efi-keys"
-    efi-readvar -v PK  -o "$CERT_DIR"/bak/PK-original.esl || error_exit "Failed to backup PK"
-    efi-readvar -v KEK -o "$CERT_DIR"/bak/KEK-original.esl || error_exit "Failed to backup KEK"
-    efi-readvar -v db  -o "$CERT_DIR"/bak/db-original.esl || error_exit "Failed to backup db"
-    efi-readvar -v dbx -o "$CERT_DIR"/bak/dbx-original.esl || error_exit "Failed to backup dbx"
+    efi-readvar > "$SBK_HOME"/bak/all-efi-keys-original.txt || error_exit "Failed to backup efi keylist"
+    efi-readvar -v PK  -o "$SBK_HOME"/bak/PK-original.esl || error_exit "Failed to backup PK"
+    efi-readvar -v KEK -o "$SBK_HOME"/bak/KEK-original.esl || error_exit "Failed to backup KEK"
+    efi-readvar -v db  -o "$SBK_HOME"/bak/db-original.esl || error_exit "Failed to backup db"
+    efi-readvar -v dbx -o "$SBK_HOME"/bak/dbx-original.esl || error_exit "Failed to backup dbx"
 
-    # Backup Files that are will be signed
+    # Backup grubx64.efi
     if [ -f "$BOOTLOADER" ]; then
-        cp -v "$BOOTLOADER" "$CERT_DIR"/bak/ || error_exit "Failed to backup bootloader"
+        cp -v "$BOOTLOADER" "$SBK_HOME"/bak/ || warning_msg "Failed to backup bootloader"
     else
         warning_msg "Bootloader not found at $BOOTLOADER"
     fi
 
+    # Backup kernel
     if [ -f "$KERNEL_IMAGE" ]; then
-        cp -v "$KERNEL_IMAGE" "$CERT_DIR"/bak/ || error_exit "Failed to backup kernel"
+        cp -v "$KERNEL_IMAGE" "$SBK_HOME"/bak/ || warning_msg "Failed to backup kernel"
     else
         warning_msg "Kernel image not found at $KERNEL_IMAGE"
     fi
 
     # List backed up files
-    ls -lh "$CERT_DIR"/bak/
+    ls -lh "$SBK_HOME"/bak/
 
     BACKUP_DONE=1
-    echo "BACKUP_DONE=1" >> "$CERT_DIR"/.config
+    echo "BACKUP_DONE=1" >> "$SBK_HOME"/.config
     success_msg "Backup completed successfully."
 }
 
 restore(){
     info_msg "Restoring backed up files..."
 
-    # Check if backup exists
-    if [ ! -f "$CERT_DIR/bak/grubx64.efi" ]; then
+    # Check if backups exists
+    if [ ! -f "$SBK_HOME/bak/grubx64.efi" ]; then
         error_exit "No backup found for grubx64.efi. Run backup first."
     fi
 
-    if [ ! -f "$CERT_DIR/bak/vmlinuz-$KERNEL_VERSION" ]; then
+    if [ ! -f "$SBK_HOME/bak/vmlinuz-$KERNEL_VERSION" ]; then
         error_exit "No backup found for kernel. Run backup first."
     fi
 
     # Restore grub
-    cp -vf "$CERT_DIR"/bak/grubx64.efi /boot/efi/EFI/kali/grubx64.efi || error_exit "Failed to restore grubx64.efi"
+    cp -vf "$SBK_HOME"/bak/grubx64.efi /boot/efi/EFI/kali/grubx64.efi || error_exit "Failed to restore grubx64.efi"
+    success_msg "GRUB restored succesfully."
 
     # Restore kernel
-    cp -vf "$CERT_DIR"/bak/"vmlinuz-$KERNEL_VERSION" "$KERNEL_IMAGE" || error_exit "Failed to restore $KERNEL_VERSION"
+    cp -vf "$SBK_HOME"/bak/"vmlinuz-$KERNEL_VERSION" "$KERNEL_IMAGE" || error_exit "Failed to restore $KERNEL_VERSION"
+    success_msg "vmlinuz-$KERNEL_VERSION restored succesfully."
 
-    success_msg "Restoration completed successfully."
-
-    echo -e "${BLUE}===========================================================${ENDCOLOR}"
-    echo -e "${CYAN}[*] Restore original keys in your UEFI(BIOS)!${ENDCOLOR}"
-    echo -e "${CYAN}[*] That's the easiest and safest way to do it.${ENDCOLOR}"
-    echo -e "${BLUE}===========================================================${ENDCOLOR}"
+    echo -e "${BLUE}==================================================${ENDCOLOR}"
+    echo -e "${CYAN}[*]      Restoration completed successfully.${ENDCOLOR}"
+    echo -e "${CYAN}[*]  Restore original keys in your UEFI (BIOS)!${ENDCOLOR}"
+    echo -e "${CYAN}[*] That is the easiest and safest way to do it.${ENDCOLOR}"
+    echo -e "${BLUE}==================================================${ENDCOLOR}"
 }
 
 mkconfigs(){
     info_msg "Creating configuration files for key generation..."
 
-    # Check if backup was done
-    if [ $BACKUP_DONE -eq 0 ]; then
-        warning_msg "Backup not done. It's recommended to run backup first."
-        read -rp "Continue without backup? [y/N]: " response
-        if [[ ! "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-            info_msg "Aborting configuration creation."
-            return 1
-        fi
-    fi
-
-    mkdir -p "$CERT_DIR"/cfg
-
-    # Make PK.cfg
-    cat <<EOF > "$CERT_DIR/cfg/PK.cfg"
+    # Make PK.cfg and use it as a template later
+    cat <<EOF > "$SBK_HOME/cfg/PK.cfg"
 [ req ]
 default_bits         = 4096
 encrypt_key          = no
@@ -120,15 +112,15 @@ EOF
     [ $? -eq 0 ] || error_exit "Failed to create PK.cfg"
 
     # Make KEK.cfg
-    cp -v "$CERT_DIR"/cfg/PK.cfg "$CERT_DIR"/cfg/KEK.cfg || error_exit "Failed to copy PK.cfg to KEK.cfg"
-    sed -i 's/PK/KEK/g' "$CERT_DIR"/cfg/KEK.cfg || error_exit "Failed to modify KEK.cfg"
+    cp -v "$SBK_HOME"/cfg/PK.cfg "$SBK_HOME"/cfg/KEK.cfg || error_exit "Failed to copy PK.cfg to KEK.cfg"
+    sed -i 's/PK/KEK/g' "$SBK_HOME"/cfg/KEK.cfg || error_exit "Failed to modify KEK.cfg"
 
     # Make db.cfg
-    cp -v "$CERT_DIR"/cfg/PK.cfg "$CERT_DIR"/cfg/db.cfg || error_exit "Failed to copy PK.cfg to db.cfg"
-    sed -i 's/PK/db/g' "$CERT_DIR"/cfg/db.cfg || error_exit "Failed to modify db.cfg"
+    cp -v "$SBK_HOME"/cfg/PK.cfg "$SBK_HOME"/cfg/db.cfg || error_exit "Failed to copy PK.cfg to db.cfg"
+    sed -i 's/PK/db/g' "$SBK_HOME"/cfg/db.cfg || error_exit "Failed to modify db.cfg"
 
     MKCONFIGS_DONE=1
-    echo "MKCONFIGS_DONE=1" >> "$CERT_DIR"/.config
+    echo "MKCONFIGS_DONE=1" >> "$SBK_HOME"/.config
     success_msg "Configuration files created successfully."
 }
 
@@ -137,29 +129,29 @@ mkcert(){
 
     # Check if configs were created
     if [ $MKCONFIGS_DONE -eq 0 ]; then
-        error_exit "Configuration files not created. Run mkconfigs first."
+        error_exit "Configuration files not created."
     fi
 
     # Create Platform Key
     openssl req -x509 -sha256 -days 5490 -outform PEM \
-        -config "$CERT_DIR"/cfg/PK.cfg \
-        -keyout "$CERT_DIR"/PK.key -out "$CERT_DIR"/PK.pem || error_exit "Failed to generate PK"
+        -config "$SBK_HOME"/cfg/PK.cfg \
+        -keyout "$SBK_HOME"/PK.key -out "$SBK_HOME"/PK.pem || error_exit "Failed to generate PK"
 
     # Create Key Exchange Key
     openssl req -x509 -sha256 -days 5490 -outform PEM \
-        -config "$CERT_DIR"/cfg/KEK.cfg \
-        -keyout "$CERT_DIR"/KEK.key -out "$CERT_DIR"/KEK.pem || error_exit "Failed to generate KEK"
+        -config "$SBK_HOME"/cfg/KEK.cfg \
+        -keyout "$SBK_HOME"/KEK.key -out "$SBK_HOME"/KEK.pem || error_exit "Failed to generate KEK"
 
     # Create Signature Database
     openssl req -x509 -sha256 -days 5490 -outform PEM \
-        -config "$CERT_DIR"/cfg/db.cfg \
-        -keyout "$CERT_DIR"/db.key -out "$CERT_DIR"/db.pem || error_exit "Failed to generate db"
+        -config "$SBK_HOME"/cfg/db.cfg \
+        -keyout "$SBK_HOME"/db.key -out "$SBK_HOME"/db.pem || error_exit "Failed to generate db"
 
-    # Check keys
-    ls -l "$CERT_DIR"/*.pem "$CERT_DIR"/*.key
+    # List created keys
+    ls -l "$SBK_HOME"/*.pem "$SBK_HOME"/*.key
 
     MKCERT_DONE=1
-    echo "MKCERT_DONE=1" >> "$CERT_DIR"/.config
+    echo "MKCERT_DONE=1" >> "$SBK_HOME"/.config
     success_msg "Key generation completed successfully."
 }
 
@@ -168,138 +160,131 @@ convert(){
 
     # Check if keys were generated
     if [ $MKCERT_DONE -eq 0 ]; then
-        error_exit "Keys not generated. Run mkcert first."
-    fi
-
-    # Check if backup was done
-    if [ $BACKUP_DONE -eq 0 ]; then
-        error_exit "Backup not done. Run backup first."
+        error_exit "Keys not generated. Create certificates first."
     fi
 
     #### Convert own certificates ####
 
-    # Create random GUID
-    if [[ ! -f "$CERT_DIR/guid.txt" ]]; then
-        echo "$(uuidgen --random)" > "$CERT_DIR/guid.txt" || error_exit "Failed to generate GUID"
-        info_msg "Generated new GUID: $(cat "$CERT_DIR"/guid.txt)"
+    # Create a random GUID
+    if [ -z "$OWN_GUID" ]; then
+        OWN_GUID=$(uuidgen --random)
+        echo "OWN_GUID=$OWN_GUID" >> "$SBK_HOME/.config" || error_exit "Failed to generate GUID"
+        info_msg "Generated new GUID: $OWN_GUID"
+    else
+        info_msg "Using GUID: $OWN_GUID"
     fi
-    info_msg "Using GUID: $(cat "$CERT_DIR"/guid.txt)"
 
     # Create PK ESL file
-    cert-to-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
-        "$CERT_DIR"/PK.pem "$CERT_DIR"/esl/PK.esl || error_exit "Failed to create PK.esl"
+    cert-to-efi-sig-list -g "$(< "$SBK_HOME"/guid.txt)" \
+        "$SBK_HOME"/PK.pem "$SBK_HOME"/esl/PK.esl || error_exit "Failed to create PK.esl"
 
     # Create PK AUTH file
-    sign-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
+    sign-efi-sig-list -g "$(< "$SBK_HOME"/guid.txt)" \
         -t "$(date +'%F %T')" \
-        -c "$CERT_DIR"/PK.pem -k "$CERT_DIR"/PK.key \
+        -c "$SBK_HOME"/PK.pem -k "$SBK_HOME"/PK.key \
         PK \
-        "$CERT_DIR"/esl/PK.esl "$CERT_DIR"/auth/PK.auth || error_exit "Failed to create PK.auth"
+        "$SBK_HOME"/esl/PK.esl "$SBK_HOME"/auth/PK.auth || error_exit "Failed to create PK.auth"
 
     # Create a KEK ESL file
-    cert-to-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
-        "$CERT_DIR"/KEK.pem "$CERT_DIR"/esl/KEK.esl || error_exit "Failed to create KEK.esl"
+    cert-to-efi-sig-list -g "$(< "$SBK_HOME"/guid.txt)" \
+        "$SBK_HOME"/KEK.pem "$SBK_HOME"/esl/KEK.esl || error_exit "Failed to create KEK.esl"
 
     # Create a KEK AUTH file
-    sign-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
+    sign-efi-sig-list -g "$(< "$SBK_HOME"/guid.txt)" \
         -t "$(date +'%F %T')" \
-        -c "$CERT_DIR"/PK.pem -k "$CERT_DIR"/PK.key \
+        -c "$SBK_HOME"/PK.pem -k "$SBK_HOME"/PK.key \
         KEK \
-        "$CERT_DIR"/esl/KEK.esl "$CERT_DIR"/auth/KEK.auth || error_exit "Failed to create KEK.auth"
+        "$SBK_HOME"/esl/KEK.esl "$SBK_HOME"/auth/KEK.auth || error_exit "Failed to create KEK.auth"
 
     # Create a db ESL file
-    cert-to-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
-        "$CERT_DIR"/db.pem "$CERT_DIR"/esl/db.esl || error_exit "Failed to create db.esl"
+    cert-to-efi-sig-list -g "$(< "$SBK_HOME"/guid.txt)" \
+        "$SBK_HOME"/db.pem "$SBK_HOME"/esl/db.esl || error_exit "Failed to create db.esl"
 
     # Create a db AUTH file
-    sign-efi-sig-list -g "$(< "$CERT_DIR"/guid.txt)" \
+    sign-efi-sig-list -g "$(< "$SBK_HOME"/guid.txt)" \
         -t "$(date +'%F %T')" \
-        -c "$CERT_DIR"/KEK.pem -k "$CERT_DIR"/KEK.key \
+        -c "$SBK_HOME"/KEK.pem -k "$SBK_HOME"/KEK.key \
         db \
-        "$CERT_DIR"/esl/db.esl "$CERT_DIR"/auth/db.auth || error_exit "Failed to create db.auth"
+        "$SBK_HOME"/esl/db.esl "$SBK_HOME"/auth/db.auth || error_exit "Failed to create db.auth"
 
     # Convert db.pem to db.der
-    openssl x509 -in "$CERT_DIR/db.pem" -out "$CERT_DIR/db.der" -outform der
+    openssl x509 -in "$SBK_HOME/db.pem" -out "$SBK_HOME/db.der" -outform der
 
     # Convert db.key to db.priv
-    cp "$CERT_DIR"/db.key "$CERT_DIR"/db.priv
+    cp "$SBK_HOME"/db.key "$SBK_HOME"/db.priv
 
-    ####Convert backed up Keys####
+    ####Convert backed up OEM Keys####
 
-    # Convert backed up OEM KEK Key
+    ##Convert backed up OEM KEK Key##
 
     # Extract KEK-original
-    sig-list-to-certs "$CERT_DIR"/bak/KEK-original.esl "$CERT_DIR"/extract/KEK || error_exit "Failed to extract KEK-original"
-
-    openssl x509 -noout -subject -dates -inform DER -in "$CERT_DIR"/extract/KEK-"$KEK_NUM".der || error_exit "Failed to read KEK certificate"
+    sig-list-to-certs "$SBK_HOME"/bak/KEK-original.esl "$SBK_HOME"/extract/KEK || error_exit "Failed to extract KEK-original"
 
     # Create a KEK ESL file
     sbsiglist --type x509 \
         --owner "$OEM_GUID" \
-        "$CERT_DIR"/extract/KEK-"$KEK_NUM".der \
-        --output "$CERT_DIR"/esl/KEK_"$OEM_NAME".esl || error_exit "Failed to create KEK_$OEM_NAME.esl"
+        "$SBK_HOME"/extract/KEK-"$KEK_NUM".der \
+        --output "$SBK_HOME"/esl/KEK_"$OEM_NAME".esl || error_exit "Failed to create KEK_$OEM_NAME.esl"
 
     # Create a KEK AUTH file
     sign-efi-sig-list -a -g "$OEM_GUID" \
         -t "$(date +'%F %T')" \
-        -k "$CERT_DIR"/PK.key -c "$CERT_DIR"/PK.pem \
+        -k "$SBK_HOME"/PK.key -c "$SBK_HOME"/PK.pem \
         KEK \
-        "$CERT_DIR"/esl/KEK_"$OEM_NAME".esl \
-        "$CERT_DIR"/auth/KEK_"$OEM_NAME".auth || error_exit "Failed to create KEK_$OEM_NAME.auth"
+        "$SBK_HOME"/esl/KEK_"$OEM_NAME".esl \
+        "$SBK_HOME"/auth/KEK_"$OEM_NAME".auth || error_exit "Failed to create KEK_$OEM_NAME.auth"
 
-    # Convert backed up OEM db Key
+    ##Convert backed up OEM db Key##
 
     # Extract db-original
-    sig-list-to-certs "$CERT_DIR"/bak/db-original.esl "$CERT_DIR"/extract/db || error_exit "Failed to extract db-original"
-
-    openssl x509 -noout -subject -dates -inform DER -in "$CERT_DIR"/extract/db-"$db_NUM".der || error_exit "Failed to read db certificate"
+    sig-list-to-certs "$SBK_HOME"/bak/db-original.esl "$SBK_HOME"/extract/db || error_exit "Failed to extract db-original"
 
     # Create a db ESL file
     sbsiglist --type x509 \
         --owner "$OEM_GUID" \
-        "$CERT_DIR"/extract/db-"$db_NUM".der \
-        --output "$CERT_DIR"/esl/db_"$OEM_NAME".esl || error_exit "Failed to create db_$OEM_NAME.esl"
+        "$SBK_HOME"/extract/db-"$db_NUM".der \
+        --output "$SBK_HOME"/esl/db_"$OEM_NAME".esl || error_exit "Failed to create db_$OEM_NAME.esl"
 
     # Create a db AUTH file
     sign-efi-sig-list -a -g "$OEM_GUID" \
         -t "$(date +'%F %T')" \
-        -k "$CERT_DIR"/KEK.key -c "$CERT_DIR"/KEK.pem \
+        -k "$SBK_HOME"/KEK.key -c "$SBK_HOME"/KEK.pem \
         db \
-        "$CERT_DIR"/esl/db_"$OEM_NAME".esl \
-        "$CERT_DIR"/auth/db_"$OEM_NAME".auth || error_exit "Failed to create db_$OEM_NAME.auth"
+        "$SBK_HOME"/esl/db_"$OEM_NAME".esl \
+        "$SBK_HOME"/auth/db_"$OEM_NAME".auth || error_exit "Failed to create db_$OEM_NAME.auth"
 
     #### Convert backed up Microsoft KEK Keys ####
 
     if [ ${#KEK_MICROSOFT_LISTS[@]} -gt 0 ]; then
         info_msg "Converting Microsoft KEK keys..."
-        rm -f "$CERT_DIR"/esl/KEK_MS.esl  # Start fresh
+        rm -f "$SBK_HOME"/esl/KEK_MS.esl  # Start fresh
 
         for index in "${KEK_MICROSOFT_LISTS[@]}"; do
-            if [ -f "$CERT_DIR/extract/KEK-$index.der" ]; then
+            if [ -f "$SBK_HOME/extract/KEK-$index.der" ]; then
                 info_msg "Processing Microsoft KEK key at index $index"
-                openssl x509 -noout -subject -dates -inform DER -in "$CERT_DIR/extract/KEK-$index.der" || error_exit "Failed to read Microsoft KEK certificate at index $index"
+                openssl x509 -noout -subject -dates -inform DER -in "$SBK_HOME/extract/KEK-$index.der" || error_exit "Failed to read Microsoft KEK certificate at index $index"
 
                 # Create individual ESL for this Microsoft KEK
                 sbsiglist --type x509 \
                     --owner "$MS_GUID" \
-                    "$CERT_DIR/extract/KEK-$index.der" \
-                    --output "$CERT_DIR/esl/KEK_MS_$index.esl" || error_exit "Failed to create KEK_MS_$index.esl"
+                    "$SBK_HOME/extract/KEK-$index.der" \
+                    --output "$SBK_HOME/esl/KEK_MS_$index.esl" || error_exit "Failed to create KEK_MS_$index.esl"
 
                 # Append to combined ESL
-                cat "$CERT_DIR/esl/KEK_MS_$index.esl" >> "$CERT_DIR/esl/KEK_MS.esl"
+                cat "$SBK_HOME/esl/KEK_MS_$index.esl" >> "$SBK_HOME/esl/KEK_MS.esl"
             else
-                warning_msg "Microsoft KEK certificate not found: $CERT_DIR/extract/KEK-$index.der"
+                error_exit "Microsoft KEK certificate not found: $SBK_HOME/extract/KEK-$index.der"
             fi
         done
 
         # Create combined AUTH file for Microsoft KEK
-        if [ -f "$CERT_DIR/esl/KEK_MS.esl" ]; then
+        if [ -f "$SBK_HOME/esl/KEK_MS.esl" ]; then
             sign-efi-sig-list -a -g "$MS_GUID" \
                 -t "$(date +'%F %T')" \
-                -k "$CERT_DIR/PK.key" -c "$CERT_DIR/PK.pem" \
+                -k "$SBK_HOME/PK.key" -c "$SBK_HOME/PK.pem" \
                 KEK \
-                "$CERT_DIR/esl/KEK_MS.esl" \
-                "$CERT_DIR/auth/KEK_MS.auth" || error_exit "Failed to create KEK_MS.auth"
+                "$SBK_HOME/esl/KEK_MS.esl" \
+                "$SBK_HOME/auth/KEK_MS.auth" || error_exit "Failed to create KEK_MS.auth"
         fi
     else
         warning_msg "No Microsoft KEK keys found to convert"
@@ -309,34 +294,34 @@ convert(){
 
     if [ ${#DB_MICROSOFT_LISTS[@]} -gt 0 ]; then
         info_msg "Converting Microsoft db keys..."
-        rm -f "$CERT_DIR"/esl/db_MS.esl  # Start fresh
+        rm -f "$SBK_HOME"/esl/db_MS.esl  # Start fresh
 
         for index in "${DB_MICROSOFT_LISTS[@]}"; do
-            if [ -f "$CERT_DIR/extract/db-$index.der" ]; then
+            if [ -f "$SBK_HOME/extract/db-$index.der" ]; then
                 info_msg "Processing Microsoft db key at index $index"
-                openssl x509 -noout -subject -dates -inform DER -in "$CERT_DIR/extract/db-$index.der" || error_exit "Failed to read Microsoft db certificate at index $index"
+                openssl x509 -noout -subject -dates -inform DER -in "$SBK_HOME/extract/db-$index.der" || error_exit "Failed to read Microsoft db certificate at index $index"
 
                 # Create individual ESL for this Microsoft db
                 sbsiglist --type x509 \
                     --owner "$MS_GUID" \
-                    "$CERT_DIR/extract/db-$index.der" \
-                    --output "$CERT_DIR/esl/db_MS_$index.esl" || error_exit "Failed to create db_MS_$index.esl"
+                    "$SBK_HOME/extract/db-$index.der" \
+                    --output "$SBK_HOME/esl/db_MS_$index.esl" || error_exit "Failed to create db_MS_$index.esl"
 
                 # Append to combined ESL
-                cat "$CERT_DIR/esl/db_MS_$index.esl" >> "$CERT_DIR/esl/db_MS.esl"
+                cat "$SBK_HOME/esl/db_MS_$index.esl" >> "$SBK_HOME/esl/db_MS.esl"
             else
-                warning_msg "Microsoft db certificate not found: $CERT_DIR/extract/db-$index.der"
+                error_exit "Microsoft db certificate not found: $SBK_HOME/extract/db-$index.der"
             fi
         done
 
         # Create combined AUTH file for Microsoft db
-        if [ -f "$CERT_DIR/esl/db_MS.esl" ]; then
+        if [ -f "$SBK_HOME/esl/db_MS.esl" ]; then
             sign-efi-sig-list -a -g "$MS_GUID" \
                 -t "$(date +'%F %T')" \
-                -k "$CERT_DIR/KEK.key" -c "$CERT_DIR/KEK.pem" \
+                -k "$SBK_HOME/KEK.key" -c "$SBK_HOME/KEK.pem" \
                 db \
-                "$CERT_DIR/esl/db_MS.esl" \
-                "$CERT_DIR/auth/db_MS.auth" || error_exit "Failed to create db_MS.auth"
+                "$SBK_HOME/esl/db_MS.esl" \
+                "$SBK_HOME/auth/db_MS.auth" || error_exit "Failed to create db_MS.auth"
         fi
     else
         warning_msg "No Microsoft db keys found to convert"
@@ -344,25 +329,25 @@ convert(){
 
     #### Convert backed up Microsoft dbx Keys ####
 
-    if [ -f "$CERT_DIR/bak/dbx-original.esl" ]; then
+    if [ -f "$SBK_HOME/bak/dbx-original.esl" ]; then
         info_msg "Converting Microsoft dbx keys..."
         sign-efi-sig-list -a -g "$MS_GUID" \
             -t "$(date +'%F %T')" \
-            -k "$CERT_DIR/KEK.key" -c "$CERT_DIR/KEK.pem" \
+            -k "$SBK_HOME/KEK.key" -c "$SBK_HOME/KEK.pem" \
             dbx \
-            "$CERT_DIR/bak/dbx-original.esl" \
-            "$CERT_DIR/auth/dbx_MS.auth" || error_exit "Failed to create dbx_MS.auth"
+            "$SBK_HOME/bak/dbx-original.esl" \
+            "$SBK_HOME/auth/dbx_MS.auth" || error_exit "Failed to create dbx_MS.auth"
     else
         warning_msg "No dbx backup found. Skipping dbx."
     fi
 
-    # List files
-    ls -l "$CERT_DIR"/esl/
-    ls -l "$CERT_DIR"/auth/
-    ls -l "$CERT_DIR"/extract/
+    # List created files
+    ls -l "$SBK_HOME"/esl/
+    ls -l "$SBK_HOME"/auth/
+    ls -l "$SBK_HOME"/extract/
 
     CONVERT_DONE=1
-    echo "CONVERT_DONE=1" >> "$CERT_DIR"/.config
+    echo "CONVERT_DONE=1" >> "$SBK_HOME"/.config
     success_msg "Certificate conversion completed successfully."
 }
 
@@ -371,7 +356,7 @@ sign_grub() {
 
     if [ -f "$BOOTLOADER" ]; then
         sbsign "$BOOTLOADER" \
-            --key "$CERT_DIR"/db.key --cert "$CERT_DIR"/db.pem \
+            --key "$SBK_HOME"/db.key --cert "$SBK_HOME"/db.pem \
             --output "$BOOTLOADER" || error_exit "Failed to sign bootloader"
 
         # Show the signature of bootloader
@@ -384,6 +369,8 @@ sign_grub() {
 }
 
 sign_kernel() {
+
+    # For signing multiple kernels
     local kernel_version="$1"
     local kernel_image="/boot/vmlinuz-$kernel_version"
 
@@ -396,7 +383,7 @@ sign_kernel() {
 
     # Sign the kernel
     sbsign "$kernel_image" \
-        --key "$CERT_DIR"/db.key --cert "$CERT_DIR"/db.pem \
+        --key "$SBK_HOME"/db.key --cert "$SBK_HOME"/db.pem \
         --output "$kernel_image" || error_exit "Failed to sign kernel $kernel_version"
 
     # Verify signature
@@ -412,8 +399,7 @@ sign_all_kernels() {
     local kernels=$(ls /boot/vmlinuz-* 2>/dev/null | grep -v rescue | sort -V)
 
     if [ -z "$kernels" ]; then
-        warning_msg "No kernel images found in /boot/"
-        return 1
+        error_exit "No kernel images found in /boot/"
     fi
 
     local signed_count=0
@@ -424,135 +410,23 @@ sign_all_kernels() {
         fi
     done
 
+    SIGN_ALL_KERNELS=1
+    echo "SIGN_ALL_KERNELS=1" >> "$SBK_HOME"/.config
     success_msg "Signed $signed_count kernel(s) successfully."
 }
 
 setup_automatic_signing() {
     info_msg "Setting up automatic signing hooks..."
 
-    # Create hooks directory if it doesn't exist
-    local hooks_dir="/etc/kernel/postinst.d"
+    # Determine hook dirs
+    local kernel_hooks_dir="/etc/kernel/postinst.d"
     local grub_hooks_dir="/etc/grub.d/post-install"
-    mkdir -p "$hooks_dir" "$grub_hooks_dir"
 
     # Create kernel post-install hook
-    cat << 'EOF' > "$hooks_dir/zz-secureboot-sign"
-#!/bin/bash
-# Automatic kernel signing hook for Secure Boot
-
-KERNEL_VERSION="$1"
-CERT_DIR="/root/secureboot"
-
-# Only proceed if Secure Boot setup is complete
-if [ ! -f "$CERT_DIR/.config" ]; then
-    exit 0
-fi
-
-# Source the config
-source "$CERT_DIR/.config" 2>/dev/null || exit 0
-
-# Only proceed if keys are generated
-if [ "$MKCERT_DONE" -ne 1 ]; then
-    exit 0
-fi
-
-# Source functions if available
-[ -f "/root/secureboot/functions.sh" ] && source "/root/secureboot/functions.sh"
-
-# Wait a moment for the kernel installation to complete
-sleep 2
-
-# Sign the newly installed kernel
-if [ -f "/boot/vmlinuz-$KERNEL_VERSION" ]; then
-    echo "Signing kernel $KERNEL_VERSION for Secure Boot..."
-    sbsign "/boot/vmlinuz-$KERNEL_VERSION" \
-        --key "$CERT_DIR/db.key" --cert "$CERT_DIR/db.pem" \
-        --output "/boot/vmlinuz-$KERNEL_VERSION" && \
-    echo "Successfully signed kernel $KERNEL_VERSION"
-fi
-
-# Update GRUB configuration
-if command -v update-grub &> /dev/null; then
-    update-grub
-elif command -v grub-mkconfig &> /dev/null; then
-    grub-mkconfig -o /boot/grub/grub.cfg
-fi
-EOF
+    cp -vf "$SBK_HOME/kernel-sbk-postinst.sh" "$kernel_hooks_dir/kernel-sbk-postinst.sh" || error_exit "Failed to create kernel post-install hook"
 
     # Create GRUB post-install hook
-    cat << 'EOF' > "$grub_hooks_dir/99-secureboot-sign"
-#!/bin/bash
-# Automatic GRUB signing hook for Secure Boot
-
-CERT_DIR="/root/secureboot"
-
-# Only proceed if Secure Boot setup is complete
-if [ ! -f "$CERT_DIR/.config" ]; then
-    exit 0
-fi
-
-# Source the config
-source "$CERT_DIR/.config" 2>/dev/null || exit 0
-
-# Only proceed if keys are generated
-if [ "$MKCERT_DONE" -ne 1 ]; then
-    exit 0
-fi
-
-# Wait a moment for GRUB installation to complete
-sleep 2
-
-# Sign GRUB
-BOOTLOADER="/boot/efi/EFI/kali/grubx64.efi"
-if [ -f "$BOOTLOADER" ]; then
-    echo "Signing GRUB bootloader for Secure Boot..."
-    sbsign "$BOOTLOADER" \
-        --key "$CERT_DIR/db.key" --cert "$CERT_DIR/db.pem" \
-        --output "$BOOTLOADER" && \
-    echo "Successfully signed GRUB bootloader"
-fi
-EOF
-
-    # Make hooks executable
-    chmod +x "$hooks_dir/zz-secureboot-sign"
-    chmod +x "$grub_hooks_dir/99-secureboot-sign"
-
-    # Also create a systemd service for periodic checking
-    cat << 'EOF' > /etc/systemd/system/secureboot-sign.service
-[Unit]
-Description=Secure Boot Automatic Signing
-After=multi-user.target
-
-[Service]
-Type=oneshot
-ExecStart=/bin/bash -c ' \
-    if [ -f "/root/secureboot/.config" ]; then \
-        source /root/secureboot/.config; \
-        if [ "$MKCERT_DONE" -eq 1 ]; then \
-            /root/secureboot/sbk.sh auto-sign; \
-        fi; \
-    fi'
-User=root
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    cat << 'EOF' > /etc/systemd/system/secureboot-sign.timer
-[Unit]
-Description=Secure Boot Automatic Signing Timer
-Requires=secureboot-sign.service
-
-[Timer]
-OnCalendar=daily
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-
-    systemctl enable secureboot-sign.timer
-    systemctl start secureboot-sign.timer
+    cp -vf "$SBK_HOME/grub-sbk-postinst.sh" "$grub_hooks_dir/grub-sbk-postinst.sh" || error_exit "Failed to create GRUB post-install hook"
 
     success_msg "Automatic signing hooks installed successfully."
 }
@@ -560,50 +434,21 @@ EOF
 remove_automatic_signing() {
     info_msg "Removing automatic signing hooks..."
 
-    rm -f /etc/kernel/postinst.d/zz-secureboot-sign
-    rm -f /etc/grub.d/post-install/99-secureboot-sign
-    systemctl disable secureboot-sign.timer 2>/dev/null || true
-    systemctl stop secureboot-sign.timer 2>/dev/null || true
-    rm -f /etc/systemd/system/secureboot-sign.service
-    rm -f /etc/systemd/system/secureboot-sign.timer
+    rm -fr "$kernel_hooks_dir/kernel-sbk-postinst.sh"
+    rm -fr "$grub_hooks_dir/grub-sbk-postinst.sh"
 
     success_msg "Automatic signing hooks removed successfully."
-}
-
-auto_sign() {
-    info_msg "Running automatic signing check..."
-
-    # Check if Secure Boot setup is complete
-    if [ ! -f "$CERT_DIR/.config" ]; then
-        info_msg "Secure Boot not configured. Skipping automatic signing."
-        return 0
-    fi
-
-    source "$CERT_DIR/.config"
-
-    if [ "$MKCERT_DONE" -ne 1 ]; then
-        info_msg "Keys not generated. Skipping automatic signing."
-        return 0
-    fi
-
-    # Sign GRUB
-    sign_grub
-
-    # Sign all kernels
-    sign_all_kernels
-
-    success_msg "Automatic signing completed."
 }
 
 dkms_sign(){
     info_msg "Enabling DKMS automatic signing..."
 
     # Configure framework.conf
-    if ! grep -q "mok_signing_key=$CERT_DIR/db.priv" /etc/dkms/framework.conf; then
-        echo "mok_signing_key=$CERT_DIR/db.priv" >> /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
+    if ! grep -q "mok_signing_key=$SBK_HOME/db.priv" /etc/dkms/framework.conf; then
+        echo "mok_signing_key=$SBK_HOME/db.priv" >> /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
     fi
-    if ! grep -q "mok_certificate=$CERT_DIR/db.der" /etc/dkms/framework.conf; then
-        echo "mok_certificate=$CERT_DIR/db.der" >> /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
+    if ! grep -q "mok_certificate=$SBK_HOME/db.der" /etc/dkms/framework.conf; then
+        echo "mok_certificate=$SBK_HOME/db.der" >> /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
     fi
 
     success_msg "Enabled DKMS automatic signing successfully"
@@ -660,15 +505,15 @@ enroll(){
     chattr -i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
 
     # Enroll our keys
-    efi-updatevar -f "$CERT_DIR"/auth/db.auth db || error_exit "Failed to enroll db key"
-    efi-updatevar -f "$CERT_DIR"/auth/KEK.auth KEK || error_exit "Failed to enroll KEK key"
-    efi-updatevar -f "$CERT_DIR"/auth/PK.auth PK || error_exit "Failed to enroll PK key"
+    efi-updatevar -f "$SBK_HOME"/auth/db.auth db || error_exit "Failed to enroll db key"
+    efi-updatevar -f "$SBK_HOME"/auth/KEK.auth KEK || error_exit "Failed to enroll KEK key"
+    efi-updatevar -f "$SBK_HOME"/auth/PK.auth PK || error_exit "Failed to enroll PK key"
 
     # Make EFI variables immutable
     chattr +i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
 
     ENROLL_DONE=1
-    echo "ENROLL_DONE=1" >> "$CERT_DIR"/.config
+    echo "ENROLL_DONE=1" >> "$SBK_HOME"/.config
     success_msg "Key enrollment completed successfully."
 }
 
@@ -684,16 +529,16 @@ enroll_oem(){
     chattr -i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
 
     # Enroll OEM KEK key
-    efi-updatevar -a -f "$CERT_DIR"/auth/KEK_"$OEM_NAME".auth KEK || error_exit "Failed to enroll OEM KEK key"
+    efi-updatevar -a -f "$SBK_HOME"/auth/KEK_"$OEM_NAME".auth KEK || error_exit "Failed to enroll OEM KEK key"
 
     # Enroll OEM db key
-    efi-updatevar -a -f "$CERT_DIR"/auth/db_"$OEM_NAME".auth db || error_exit "Failed to enroll OEM db key"
+    efi-updatevar -a -f "$SBK_HOME"/auth/db_"$OEM_NAME".auth db || error_exit "Failed to enroll OEM db key"
 
     # Make EFI variables immutable
     chattr +i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
 
     ENROLL_OEM_DONE=1
-    echo "ENROLL_OEM_DONE=1" >> "$CERT_DIR"/.config
+    echo "ENROLL_OEM_DONE=1" >> "$SBK_HOME"/.config
     success_msg "OEM key enrollment completed successfully."
 }
 
@@ -712,14 +557,14 @@ enroll_ms(){
 
     # Enroll Microsoft keys
     info_msg "Enrolling Microsoft keys..."
-    efi-updatevar -a -f "$CERT_DIR"/auth/KEK_MS.auth KEK || error_exit "Failed to enroll Microsoft KEK key"
-    efi-updatevar -a -f "$CERT_DIR"/auth/db_MS.auth db || error_exit "Failed to enroll Microsoft db key"
-    #efi-updatevar -f "$CERT_DIR"/auth/dbx_MS.auth dbx || warning_msg "Failed to enroll Microsoft dbx key"
+    efi-updatevar -a -f "$SBK_HOME"/auth/KEK_MS.auth KEK || error_exit "Failed to enroll Microsoft KEK key"
+    efi-updatevar -a -f "$SBK_HOME"/auth/db_MS.auth db || error_exit "Failed to enroll Microsoft db key"
+    #efi-updatevar -f "$SBK_HOME"/auth/dbx_MS.auth dbx || warning_msg "Failed to enroll Microsoft dbx key"
 
     # Make EFI variables immutable
     chattr +i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
 
     ENROLL_MS_DONE=1
-    echo "ENROLL_MS_DONE=1" >> "$CERT_DIR"/.config
+    echo "ENROLL_MS_DONE=1" >> "$SBK_HOME"/.config
     success_msg "Microsoft key enrollment completed successfully."
 }
