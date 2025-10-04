@@ -423,10 +423,10 @@ setup_automatic_signing() {
     local grub_hooks_dir="/etc/grub.d/post-install"
 
     # Create kernel post-install hook
-    cp -vf "$SBK_HOME/kernel-sbk-postinst.sh" "$kernel_hooks_dir/kernel-sbk-postinst.sh" || error_exit "Failed to create kernel post-install hook"
+    cp -vf "$SBK_HOME/scripts/kernel-sbk-postinst" "$kernel_hooks_dir/kernel-sbk-postinst" || error_exit "Failed to create kernel post-install hook"
 
     # Create GRUB post-install hook
-    cp -vf "$SBK_HOME/grub-sbk-postinst.sh" "$grub_hooks_dir/grub-sbk-postinst.sh" || error_exit "Failed to create GRUB post-install hook"
+    cp -vf "$SBK_HOME/scripts/grub-sbk-postinst" "$grub_hooks_dir/grub-sbk-postinst" || error_exit "Failed to create GRUB post-install hook"
 
     success_msg "Automatic signing hooks installed successfully."
 }
@@ -434,8 +434,8 @@ setup_automatic_signing() {
 remove_automatic_signing() {
     info_msg "Removing automatic signing hooks..."
 
-    rm -fr "$kernel_hooks_dir/kernel-sbk-postinst.sh"
-    rm -fr "$grub_hooks_dir/grub-sbk-postinst.sh"
+    rm -fr "$kernel_hooks_dir/kernel-sbk-postinst"
+    rm -fr "$grub_hooks_dir/grub-sbk-postinst"
 
     success_msg "Automatic signing hooks removed successfully."
 }

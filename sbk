@@ -63,7 +63,7 @@ if [[ ! -d "$SBK_HOME" ]]; then
     mkdir -vp "$SBK_HOME"/{auth,bak,cfg,esl,extract,scripts} || error_exit "Failed to create $SBK_HOME"
     success_msg "HOME created successfully."
 
-elif [[ -d "$SBK_HOME/scripts" && ! -d "$SBK_HOME/{auth,bak,cfg,esl,extract}" ]]; then
+elif [[ -d "$SBK_HOME/scripts" && ! -d "$SBK_HOME"/auth ]]; then
     info_msg "Creating HOME..."
     mkdir -vp "$SBK_HOME"/{auth,bak,cfg,esl,extract} || error_exit "Failed to recreate $SBK_HOME"
     success_msg "HOME created successfully."
@@ -176,7 +176,6 @@ if [[ ! -f "$SBK_HOME/.config" || $RESETTED -eq 1 ]]; then
     )
 
     # Save the vars to .config
-    : > "$SBK_HOME/.config" || error_exit "Failed to create .config" # Clear or create .config file
     for var in "${variables_to_save[@]}"; do
         if [[ $var == *[@] ]]; then
             # Handle arrays
