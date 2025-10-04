@@ -175,33 +175,33 @@ convert(){
     fi
 
     # Create PK ESL file
-    cert-to-efi-sig-list -g "$(< "$SBK_HOME"/guid.txt)" \
+    cert-to-efi-sig-list -g "$OWN_GUID" \
         "$SBK_HOME"/PK.pem "$SBK_HOME"/esl/PK.esl || error_exit "Failed to create PK.esl"
 
     # Create PK AUTH file
-    sign-efi-sig-list -g "$(< "$SBK_HOME"/guid.txt)" \
+    sign-efi-sig-list -g "$OWN_GUID" \
         -t "$(date +'%F %T')" \
         -c "$SBK_HOME"/PK.pem -k "$SBK_HOME"/PK.key \
         PK \
         "$SBK_HOME"/esl/PK.esl "$SBK_HOME"/auth/PK.auth || error_exit "Failed to create PK.auth"
 
     # Create a KEK ESL file
-    cert-to-efi-sig-list -g "$(< "$SBK_HOME"/guid.txt)" \
+    cert-to-efi-sig-list -g "$OWN_GUID" \
         "$SBK_HOME"/KEK.pem "$SBK_HOME"/esl/KEK.esl || error_exit "Failed to create KEK.esl"
 
     # Create a KEK AUTH file
-    sign-efi-sig-list -g "$(< "$SBK_HOME"/guid.txt)" \
+    sign-efi-sig-list -g "$OWN_GUID" \
         -t "$(date +'%F %T')" \
         -c "$SBK_HOME"/PK.pem -k "$SBK_HOME"/PK.key \
         KEK \
         "$SBK_HOME"/esl/KEK.esl "$SBK_HOME"/auth/KEK.auth || error_exit "Failed to create KEK.auth"
 
     # Create a db ESL file
-    cert-to-efi-sig-list -g "$(< "$SBK_HOME"/guid.txt)" \
+    cert-to-efi-sig-list -g "$OWN_GUID" \
         "$SBK_HOME"/db.pem "$SBK_HOME"/esl/db.esl || error_exit "Failed to create db.esl"
 
     # Create a db AUTH file
-    sign-efi-sig-list -g "$(< "$SBK_HOME"/guid.txt)" \
+    sign-efi-sig-list -g "$OWN_GUID" \
         -t "$(date +'%F %T')" \
         -c "$SBK_HOME"/KEK.pem -k "$SBK_HOME"/KEK.key \
         db \
