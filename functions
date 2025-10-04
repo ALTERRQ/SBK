@@ -502,7 +502,7 @@ enroll(){
     fi
 
     # Make EFI variables mutable
-    chattr -i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
+    chattr -i /sys/firmware/efi/efivars/{PK,KEK,db}-* 2>/dev/null || true
 
     # Enroll our keys
     efi-updatevar -f "$SBK_HOME"/auth/db.auth db || error_exit "Failed to enroll db key"
@@ -510,7 +510,7 @@ enroll(){
     efi-updatevar -f "$SBK_HOME"/auth/PK.auth PK || error_exit "Failed to enroll PK key"
 
     # Make EFI variables immutable
-    chattr +i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
+    chattr +i /sys/firmware/efi/efivars/{PK,KEK,db}-* 2>/dev/null || true
 
     ENROLL_DONE=1
     echo "ENROLL_DONE=1" >> "$SBK_HOME"/.config
@@ -526,7 +526,7 @@ enroll_oem(){
     fi
 
     # Make EFI variables mutable
-    chattr -i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
+    chattr -i /sys/firmware/efi/efivars/{KEK,db}-* 2>/dev/null || true
 
     # Enroll OEM KEK key
     efi-updatevar -a -f "$SBK_HOME"/auth/KEK_"$OEM_NAME".auth KEK || error_exit "Failed to enroll OEM KEK key"
@@ -535,7 +535,7 @@ enroll_oem(){
     efi-updatevar -a -f "$SBK_HOME"/auth/db_"$OEM_NAME".auth db || error_exit "Failed to enroll OEM db key"
 
     # Make EFI variables immutable
-    chattr +i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
+    chattr +i /sys/firmware/efi/efivars/{KEK,db}-* 2>/dev/null || true
 
     ENROLL_OEM_DONE=1
     echo "ENROLL_OEM_DONE=1" >> "$SBK_HOME"/.config
@@ -553,7 +553,7 @@ enroll_ms(){
     # Enroll Microsoft keys
 
     # Make EFI variables mutable
-    chattr -i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
+    chattr -i /sys/firmware/efi/efivars/{KEK,db,dbx}-* 2>/dev/null || true
 
     # Enroll Microsoft keys
     info_msg "Enrolling Microsoft keys..."
@@ -562,7 +562,7 @@ enroll_ms(){
     #efi-updatevar -f "$SBK_HOME"/auth/dbx_MS.auth dbx || warning_msg "Failed to enroll Microsoft dbx key"
 
     # Make EFI variables immutable
-    chattr +i /sys/firmware/efi/efivars/{PK,KEK,db,dbx}-* 2>/dev/null || true
+    chattr +i /sys/firmware/efi/efivars/{KEK,db,dbx}-* 2>/dev/null || true
 
     ENROLL_MS_DONE=1
     echo "ENROLL_MS_DONE=1" >> "$SBK_HOME"/.config
