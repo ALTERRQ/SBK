@@ -423,9 +423,11 @@ setup_automatic_signing() {
     local grub_hooks_dir="/etc/grub.d/post-install"
 
     # Create kernel post-install hook
+    mkdir $kernel_hooks_dir
     cp -vf "$SBK_HOME/scripts/kernel-sbk-postinst" "$kernel_hooks_dir/kernel-sbk-postinst" || error_exit "Failed to create kernel post-install hook"
 
     # Create GRUB post-install hook
+    mkdir $grub_hooks_dir
     cp -vf "$SBK_HOME/scripts/grub-sbk-postinst" "$grub_hooks_dir/grub-sbk-postinst" || error_exit "Failed to create GRUB post-install hook"
 
     success_msg "Automatic signing hooks installed successfully."
