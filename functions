@@ -163,6 +163,11 @@ convert(){
         error_exit "Keys not generated. Create certificates first."
     fi
 
+    # Check if backup was made
+    if [ $BACKUP_DONE -eq 0 ]; then
+        error_exit "Backup not made. Make backup first."
+    fi
+
     #### Convert own certificates ####
 
     # Create a random GUID
