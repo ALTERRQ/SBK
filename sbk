@@ -118,6 +118,9 @@ else
     if [ -z "$OEM_NAME" ]; then
         error_exit "Could not determine OEM name"
     fi
+    if [ "$OEM_NAME" == "SBK" ]; then
+        error_exit "You did not enrolled back the factory default keys"
+    fi
 
     # Get KEK_INFO
     KEK_INFO=$(efi-readvar -v KEK 2>&1)
