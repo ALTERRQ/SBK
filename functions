@@ -3,6 +3,36 @@
 # CAUTION: this script could be dangerous!!!
 # SBK functions by ALTERRQ
 
+#!/bin/bash
+
+modify_config() {
+    local var_name="$1"
+    local new_value="$2"
+
+    # Remove existing entry
+    sed -i "/^[[:space:]]*${var_name}[[:space:]]*=/d" "$config_file"
+
+    # Special handling for array variables (like KEK_MICROSOFT_LISTS and DB_MICROSOFT_LISTS)
+    if [[ "$var_name" == *"_LISTS" ]]; then
+        # This is an array variable - ensure it's in proper bash array format
+        if [[ ! "$new_value" =~ ^\(.*\)$ ]]; then
+            # If not already in array format, wrap it
+            new_value="($new_value)"
+        fi
+    fi
+
+    # Add new entry
+    echo "${var_name}=${new_value}" >> "$config_file"
+
+    local result=$?
+    if [[ $result -eq 0 ]]; then
+        echo "Updated $var_name to $new_value in $config_file"
+    else
+        echo "${RED}[ERROR] Failed to update $var_name${ENDCOLOR}" >&2
+        return 1
+    fi
+}
+
 status(){
     info_msg "Secure Boot status:"
     bootctl status 2>&1 | grep 'Secure Boot' || warning_msg "Failed to determine secure boot status"
@@ -21,7 +51,11 @@ reset(){
     # Delete everything in home except scripts
     find "$SBK_HOME" -mindepth 1 -maxdepth 1 -not -name "scripts" -exec rm -rf {} + || error_exit "Failed to clean home"
 
-    success_msg "Reset completed successfully."
+    # Remove dkms signing
+    sed -i '\|mok_signing_key=/root/sbk/db.priv|d' /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
+    sed -i '\|mok_certificate=/root/sbk/db.der|d' /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
+
+    success_msg "Reset completed successfully. Restore factory default keys if you will try to reconfigure!"
     exit 0
 }
 
@@ -53,7 +87,7 @@ backup(){
     ls -lh "$SBK_HOME"/bak/
 
     BACKUP_DONE=1
-    echo "BACKUP_DONE=1" >> "$SBK_HOME"/.config
+    modify_config "BACKUP_DONE" "1"
     success_msg "Backup completed successfully."
 }
 
@@ -120,7 +154,7 @@ EOF
     sed -i 's/PK/db/g' "$SBK_HOME"/cfg/db.cfg || error_exit "Failed to modify db.cfg"
 
     MKCONFIGS_DONE=1
-    echo "MKCONFIGS_DONE=1" >> "$SBK_HOME"/.config
+    modify_config "MKCONFIGS_DONE" "1"
     success_msg "Configuration files created successfully."
 }
 
@@ -151,7 +185,7 @@ mkcert(){
     ls -l "$SBK_HOME"/*.pem "$SBK_HOME"/*.key
 
     MKCERT_DONE=1
-    echo "MKCERT_DONE=1" >> "$SBK_HOME"/.config
+    modify_config "MKCERT_DONE" "1"
     success_msg "Key generation completed successfully."
 }
 
@@ -173,7 +207,7 @@ convert(){
     # Create a random GUID
     if [ -z "$OWN_GUID" ]; then
         OWN_GUID=$(uuidgen --random)
-        echo "OWN_GUID=$OWN_GUID" >> "$SBK_HOME/.config" || error_exit "Failed to generate GUID"
+        modify_config "OWN_GUID" "$OWN_GUID"
         info_msg "Generated new GUID: $OWN_GUID"
     else
         info_msg "Using GUID: $OWN_GUID"
@@ -352,7 +386,7 @@ convert(){
     ls -l "$SBK_HOME"/extract/
 
     CONVERT_DONE=1
-    echo "CONVERT_DONE=1" >> "$SBK_HOME"/.config
+    modify_config "CONVERT_DONE" "1"
     success_msg "Certificate conversion completed successfully."
 }
 
@@ -416,7 +450,7 @@ sign_all_kernels() {
     done
 
     SIGN_ALL_KERNELS=1
-    echo "SIGN_ALL_KERNELS=1" >> "$SBK_HOME"/.config
+    modify_config "SIGN_ALL_KERNELS" "1"
     success_msg "Signed $signed_count kernel(s) successfully."
 }
 
@@ -520,7 +554,7 @@ enroll(){
     chattr +i /sys/firmware/efi/efivars/{PK,KEK,db}-* 2>/dev/null || true
 
     ENROLL_DONE=1
-    echo "ENROLL_DONE=1" >> "$SBK_HOME"/.config
+    modify_config "ENROLL_DONE" "1"
     success_msg "Key enrollment completed successfully."
 }
 
@@ -545,7 +579,7 @@ enroll_oem(){
     chattr +i /sys/firmware/efi/efivars/{KEK,db}-* 2>/dev/null || true
 
     ENROLL_OEM_DONE=1
-    echo "ENROLL_OEM_DONE=1" >> "$SBK_HOME"/.config
+    modify_config "ENROLL_OEM_DONE" "1"
     success_msg "OEM key enrollment completed successfully."
 }
 
@@ -572,6 +606,6 @@ enroll_ms(){
     chattr +i /sys/firmware/efi/efivars/{KEK,db,dbx}-* 2>/dev/null || true
 
     ENROLL_MS_DONE=1
-    echo "ENROLL_MS_DONE=1" >> "$SBK_HOME"/.config
+    modify_config "ENROLL_MS_DONE" "1"
     success_msg "Microsoft key enrollment completed successfully."
 }

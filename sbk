@@ -40,17 +40,27 @@ KERNEL_VERSION=$(uname -r)
 KERNEL_IMAGE="/boot/vmlinuz-$KERNEL_VERSION"
 MS_GUID=77fa9abd-0359-4d32-bd60-28f4e78f784b
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_FILE="$SBK_HOME/sbk.log"
+config_file="$SBK_HOME/config"
 INSTALLED=0
 
 # Logging
-> "$LOG_FILE"
-exec > >(tee >(
-    while IFS= read -r line; do
-        printf "%s: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$line" >> "$LOG_FILE"
-    done
-))
-exec 2>&1
+if [[ -d "$SBK_HOME" ]]; then
+    > "$SBK_HOME/sbk.log"
+    exec > >(tee >(
+        while IFS= read -r line; do
+            printf "%s: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$line" >> "$SBK_HOME/sbk.log"
+        done
+    ))
+    exec 2>&1
+else
+    > "$CURRENT_DIR/sbk-install.log"
+    exec > >(tee >(
+        while IFS= read -r line; do
+            printf "%s: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$line" >> "$CURRENT_DIR/sbk-install.log"
+        done
+    ))
+    exec 2>&1
+fi
 
 # Check root
 if [[ $EUID -ne 0 ]]; then
@@ -63,33 +73,23 @@ if [[ ! -d "$SBK_HOME" ]]; then
     mkdir -vp "$SBK_HOME"/{auth,bak,cfg,esl,extract,scripts} || error_exit "Failed to create $SBK_HOME"
     success_msg "HOME created successfully."
 
-elif [[ -d "$SBK_HOME/scripts" && ! -d "$SBK_HOME"/auth ]]; then
+elif [[ ! -d "$SBK_HOME"/auth ]]; then
     info_msg "Creating HOME..."
     mkdir -vp "$SBK_HOME"/{auth,bak,cfg,esl,extract} || error_exit "Failed to recreate $SBK_HOME"
     success_msg "HOME created successfully."
 
-    RESETTED=1
     INSTALLED=1
-    echo "INSTALLED=1" >> "$SBK_HOME"/.config
     success_msg "Script is already installed."
-fi
-
-# Source .config
-if [[ -f "$SBK_HOME/.config" ]]; then
-    source "$SBK_HOME/.config" || error_exit "Failed to source .config"
 fi
 
 # Install dependencies
 DEPLIST="openssl efitools sbsigntool pesign uuid-runtime systemd-boot-tools dkms"
-if [[ "$DEPS" -eq 0 || ! -f "$SBK_HOME/.config" ]]; then
+if [[ ! -f "$SBK_HOME/config" ]]; then
     sudo apt update
     sudo apt install $DEPLIST -y
     if [ $? -ne 0 ]; then
-        DEPS=0
         error_exit "Failed to install dependencies"
-        exit 1
     else
-        DEPS=1
         success_msg "Dependencies installed successfully."
         read -rp "Press Enter to continue..."
     fi
@@ -97,53 +97,60 @@ else
     info_msg "Dependencies should be installed..."
 fi
 
-# Determine and save some vars to .config
-if [[ ! -f "$SBK_HOME/.config" || $RESETTED -eq 1 ]]; then
-    # Status tracking variables
-    BACKUP_DONE=0
-    MKCONFIGS_DONE=0
-    MKCERT_DONE=0
-    CONVERT_DONE=0
-    SIGN_ALL_KERNELS=0
-    ENROLL_DONE=0
-    ENROLL_OEM_DONE=0
-    ENROLL_MS_DONE=0
-    SETUP_DONE=0
+# Source config or create config and gather information from efi
+if [[ -f "$SBK_HOME/config" ]]; then
 
-    # Get OEM name
+    # Source config
+    source "$SBK_HOME/config" || error_exit "Failed to source config"
+
+    # Source functions
+    source "$SBK_HOME/scripts/functions" || error_exit "Failed to source functions"
+
+else
+    # Source functions
+    source "$CURRENT_DIR/functions" || error_exit "Failed to source functions"
+
+    ## Determine and save some vars to config ##
+    info_msg "Saving EFI vars to config..."
+
+    # Get OEM_NAME
     OEM_NAME=$(efi-readvar -v PK 2>&1 | grep -m1 "CN=" | awk -F'CN=' '{print $2}' | awk '{print $1}')
     if [ -z "$OEM_NAME" ]; then
         error_exit "Could not determine OEM name"
     fi
 
-    # Get KEK_NUM and OEM_GUID
+    # Get KEK_INFO
     KEK_INFO=$(efi-readvar -v KEK 2>&1)
     if [ $? -ne 0 ]; then
         error_exit "Failed to read KEK variables"
     fi
 
+    # Get KEK_NUM
     KEK_NUM=$(echo "$KEK_INFO" | awk -v oem="$OEM_NAME" '
         /^KEK: List/ {gsub(/,/, "", $3); list=$3}
         /CN=/ && $0 ~ oem {print list; exit}')
-
-    OEM_GUID=$(echo "$KEK_INFO" | awk -v oem="$OEM_NAME" '
-        /owner/ {gsub(/,/, "", $NF); guid=$NF}
-        /CN=/ && $0 ~ oem {print guid; exit}')
-
     if [ -z "$KEK_NUM" ]; then
         error_exit "OEM:'$OEM_NAME' is not found in KEK"
     fi
 
-    # Get db_NUM
+    # Get OEM_GUID
+    OEM_GUID=$(echo "$KEK_INFO" | awk -v oem="$OEM_NAME" '
+        /owner/ {gsub(/,/, "", $NF); guid=$NF}
+        /CN=/ && $0 ~ oem {print guid; exit}')
+    if [ -z "$OEM_GUID" ]; then
+        error_exit "Failed to get OEM guid"
+    fi
+
+    # Get DB_INFO
     DB_INFO=$(efi-readvar -v db 2>&1)
     if [ $? -ne 0 ]; then
         error_exit "Failed to read db variables"
     fi
 
+    # Get db_NUM
     db_NUM=$(echo "$DB_INFO" | awk -v oem="$OEM_NAME" '
         /^db: List/ {gsub(/,/, "", $3); list=$3}
         /CN=/ && $0 ~ oem {print list; exit}')
-
     if [ -z "$db_NUM" ]; then
         error_exit "OEM:'$OEM_NAME' is not found in db"
     fi
@@ -152,41 +159,57 @@ if [[ ! -f "$SBK_HOME/.config" || $RESETTED -eq 1 ]]; then
     KEK_MICROSOFT_LISTS=$(echo "$KEK_INFO" | awk -v guid="$MS_GUID" '
     /^KEK: List/ {gsub(/,/, "", $3); list=$3}
     /owner/ && $NF ~ guid {print list}')
-
-    # Convert to array
-    KEK_MICROSOFT_LISTS=($KEK_MICROSOFT_LISTS)
+    if [ -z "$KEK_MICROSOFT_LISTS" ]; then
+        error_exit "Failed to determine Microsoft KEK list"
+    fi
 
     # Get Microsoft key list numbers for db
     DB_MICROSOFT_LISTS=$(echo "$DB_INFO" | awk -v guid="$MS_GUID" '
         /^db: List/ {gsub(/,/, "", $3); list=$3}
         /owner/ && $NF ~ guid {print list}')
+     if [ -z "$DB_MICROSOFT_LISTS" ]; then
+        error_exit "Failed to determine Microsoft DB list"
+    fi
 
-    # Convert to array
-    DB_MICROSOFT_LISTS=($DB_MICROSOFT_LISTS)
+    # Create config
+    touch "$SBK_HOME"/config
 
-    # Variables to save to .config
+    # EFI variables to save to config
     variables_to_save=(
         "OEM_NAME"
         "KEK_NUM"
         "db_NUM"
         "OEM_GUID"
-        "DEPS"
-        "KEK_MICROSOFT_LISTS[@]"
-        "DB_MICROSOFT_LISTS[@]"
+        "KEK_MICROSOFT_LISTS"
+        "DB_MICROSOFT_LISTS"
+        "INSTALLED"
     )
 
-    # Save the vars to .config
+    # Convert to arrays and format them properly
+    KEK_MICROSOFT_LISTS=($KEK_MICROSOFT_LISTS)
+    DB_MICROSOFT_LISTS=($DB_MICROSOFT_LISTS)
+
+    # Format arrays as bash arrays
+    kek_array_value="($(printf '"%s" ' "${KEK_MICROSOFT_LISTS[@]}"))"
+    db_array_value="($(printf '"%s" ' "${DB_MICROSOFT_LISTS[@]}"))"
+
+    # Save vars to config
     for var in "${variables_to_save[@]}"; do
-        if [[ $var == *[@] ]]; then
-            # Handle arrays
-            var_name=${var%[@]}
-            declare -n array_ref="$var_name"
-            echo "${var_name}=(${array_ref[*]})" >> "$SBK_HOME/.config"
+        if [[ "$var" == "KEK_MICROSOFT_LISTS" ]]; then
+            value="$kek_array_value"
+        elif [[ "$var" == "DB_MICROSOFT_LISTS" ]]; then
+            value="$db_array_value"
         else
-            # Handle scalars
-            echo "${var}=\"${!var}\"" >> "$SBK_HOME/.config"
+            value="${!var}"
+        fi
+
+        if ! modify_config "$var" "$value"; then
+            rm -fr "$SBK_HOME/config"
+            error_exit "Failed to add $var to config"
         fi
     done
+        success_msg "EFI vars saved successfully."
+        read -rp "Press Enter to continue..."
 fi
 
 # "Install" script
@@ -206,14 +229,11 @@ if [ $INSTALLED -eq 0 ]; then
     cp -vf "$CURRENT_DIR/grub-sbk-postinst" "$SBK_HOME/scripts/grub-sbk-postinst" || error_exit "Failed to copy grub-sbk-postinst to SBK_HOME"
 
     INSTALLED=1
-    echo "INSTALLED=1" >> "$SBK_HOME"/.config
+    modify_config "INSTALLED" "1"
     success_msg "Script installed succesfully. To use script run the command: \"sudo sbk\" anywhere."
     read -rp "Press Enter to continue..."
     exit 0
 fi
-
-# Source functions
-source "$SBK_HOME/scripts/functions" || error_exit "Failed to source functions"
 
 complete_setup_stage1(){
     info_msg "Starting complete Secure Boot setup..."
@@ -226,7 +246,7 @@ complete_setup_stage1(){
 
     # Signal script to start stage2 in next run
     STAGE_2=1
-    echo "STAGE_2=1" >> "$SBK_HOME"/.config
+    echo "STAGE_2=1" >> "$SBK_HOME"/config
 
     echo -e "${BLUE}===========================================================${ENDCOLOR}"
     echo -e "${CYAN}[*] Please reboot to UEFI(BIOS) & delete all enrolled keys!${ENDCOLOR}"
@@ -258,7 +278,7 @@ complete_setup_stage2(){
     efi-readvar
 
     SETUP_DONE=1
-    echo "SETUP_DONE=1" >> "$SBK_HOME"/.config
+    echo "SETUP_DONE=1" >> "$SBK_HOME"/config
 
     echo -e "${BLUE}==============================================${ENDCOLOR}"
     echo -e "${CYAN}##############################################${ENDCOLOR}"
