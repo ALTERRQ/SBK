@@ -8,6 +8,7 @@
 modify_config() {
     local var_name="$1"
     local new_value="$2"
+    local config_file="${3:-$DEF_CONFIG_FILE}"
 
     # Remove existing entry
     sed -i "/^[[:space:]]*${var_name}[[:space:]]*=/d" "$config_file"
@@ -50,10 +51,6 @@ reset(){
 
     # Delete everything in home except scripts
     find "$SBK_HOME" -mindepth 1 -maxdepth 1 -not -name "scripts" -exec rm -rf {} + || error_exit "Failed to clean home"
-
-    # Remove dkms signing
-    sed -i '\|mok_signing_key=/root/sbk/db.priv|d' /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
-    sed -i '\|mok_certificate=/root/sbk/db.der|d' /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
 
     success_msg "Reset completed successfully. Restore factory default keys if you will try to reconfigure!"
     exit 0
@@ -457,9 +454,12 @@ sign_all_kernels() {
 setup_automatic_signing() {
     info_msg "Setting up automatic signing hooks..."
 
-    # Determine hook dirs
+    # Determine hook vars
     local kernel_hooks_dir="/etc/kernel/postinst.d"
     local grub_hooks_dir="/etc/grub.d/post-install"
+    local framework_conf="/etc/dkms/framework.conf"
+    local key_line="mok_signing_key=$SBK_HOME/db.priv"
+    local cert_line="mok_certificate=$SBK_HOME/db.der"
 
     # Create kernel post-install hook
     mkdir $kernel_hooks_dir
@@ -469,7 +469,11 @@ setup_automatic_signing() {
     mkdir $grub_hooks_dir
     cp -vf "$SBK_HOME/scripts/grub-sbk-postinst" "$grub_hooks_dir/grub-sbk-postinst" || error_exit "Failed to create GRUB post-install hook"
 
-    success_msg "Automatic signing hooks installed successfully."
+    # Reuse modify_config funtion to create DKMS signing hook
+    modify_config "$key_line" "" "$framework_conf"
+    modify_config "$cert_line" "" "$framework_conf"
+
+    success_msg "Automatic signing hooks installed successfully(KERNELS, GRUB, DKMS)."
 }
 
 remove_automatic_signing() {
@@ -478,33 +482,25 @@ remove_automatic_signing() {
     rm -fr "$kernel_hooks_dir/kernel-sbk-postinst"
     rm -fr "$grub_hooks_dir/grub-sbk-postinst"
 
+    # Remove dkms signing
+    sed -i '\|mok_signing_key=/root/sbk/db.priv|d' /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
+    sed -i '\|mok_certificate=/root/sbk/db.der|d' /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
+
     success_msg "Automatic signing hooks removed successfully."
 }
 
-dkms_sign(){
-    info_msg "Enabling DKMS automatic signing..."
-
-    # Configure framework.conf
-    if ! grep -q "mok_signing_key=$SBK_HOME/db.priv" /etc/dkms/framework.conf; then
-        echo "mok_signing_key=$SBK_HOME/db.priv" >> /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
-    fi
-    if ! grep -q "mok_certificate=$SBK_HOME/db.der" /etc/dkms/framework.conf; then
-        echo "mok_certificate=$SBK_HOME/db.der" >> /etc/dkms/framework.conf || error_exit "Failed to edit /etc/dkms/framework.conf"
-    fi
-
-    success_msg "Enabled DKMS automatic signing successfully"
-
-    info_msg "Rebuilding modules to sign them:"
+rebuild_dkms(){
+   info_msg "Rebuilding modules to sign them:"
 
     # Determine installed modules
-    dkms_modules=$(dkms status 2>/dev/null | sed -n 's/^\([^\/]*\)\/\([^,]*\),.*/\1\/\2/p' | sort -u)
-
-    info_msg "Found module(s): $dkms_modules"
+    dkms_modules=$(dkms status 2>/dev/null | awk -F: '/added/ {print $1}' | sort -u)
 
     if [ -z "$dkms_modules" ]; then
         warning_msg "No DKMS dkms_modules found to rebuild"
         return 0
     fi
+
+    info_msg "Found module(s): $dkms_modules"
 
     local rebuild_errors=0
     local module_count=0
@@ -530,7 +526,7 @@ dkms_sign(){
     if [ $rebuild_errors -eq 0 ]; then
         success_msg "DKMS signing completed successfully"
     else
-        warning_msg "DKMS signing completed with $rebuild_errors errors"
+        warning_msg "DKMS signing completed with $rebuild_errors errors. You should try to reinstall your DKMS modules for them to work! (Like reinstalling an apt package)"
     fi
 }
 

@@ -40,7 +40,7 @@ KERNEL_VERSION=$(uname -r)
 KERNEL_IMAGE="/boot/vmlinuz-$KERNEL_VERSION"
 MS_GUID=77fa9abd-0359-4d32-bd60-28f4e78f784b
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-config_file="$SBK_HOME/config"
+DEF_CONFIG_FILE="$SBK_HOME/config"
 INSTALLED=0
 
 # Logging
@@ -267,8 +267,8 @@ complete_setup_stage2(){
     success_msg "Installed GRUB succesfully."
     sign_all_kernels
     sign_grub
-    dkms_sign
     setup_automatic_signing
+    rebuild_dkms
     enroll
     enroll_oem
     read -rp "Do you want to enroll Microsoft keys (for dualboot with Windows)? [y/N]: " response
@@ -310,7 +310,7 @@ display_menu() {
     echo -e "${GREEN}11. Sign All Kernels${ENDCOLOR}"
     echo -e "${GREEN}12. Setup Automatic Signing${ENDCOLOR}"
     echo -e "${GREEN}13. Remove Automatic Signing${ENDCOLOR}"
-    echo -e "${GREEN}14. Sign DKMS${ENDCOLOR}"
+    echo -e "${GREEN}14. Rebuild DKMS modules${ENDCOLOR}"
     echo -e "${PURPLE}15. Reboot to UEFI Settings${ENDCOLOR}"
     echo -e "${GREEN}16. Restore Backed Up files${ENDCOLOR}"
     echo -e "${RED}17. Reset Script (Also created keys will be lost!!!)${ENDCOLOR}"
@@ -393,7 +393,7 @@ while true; do
             read -rp "Press Enter to continue..."
             ;;
         14)
-            dkms_sign
+            rebuild_dkms
             read -rp "Press Enter to continue..."
             ;;
         15)
