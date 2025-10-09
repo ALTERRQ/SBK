@@ -44,19 +44,31 @@ DEF_CONFIG_FILE="$SBK_HOME/config"
 INSTALLED=0
 
 # Logging
-if [[ -d "$SBK_HOME" ]]; then
-    > "$SBK_HOME/sbk.log"
+if [[ -f /usr/local/bin/sbk ]]; then
+    LOG_FILE="$SBK_HOME/sbk.log"
+
+    # Reset log after 10000 lines
+    if [[ -f "$LOG_FILE" ]] && [[ $(wc -l < "$LOG_FILE") -gt 10000 ]]; then
+        rm -f "$LOG_FILE"
+    fi
+
     exec > >(tee >(
         while IFS= read -r line; do
-            printf "%s: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$line" >> "$SBK_HOME/sbk.log"
+            printf "%s: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$line" >> "$LOG_FILE"
         done
     ))
     exec 2>&1
 else
-    > "$CURRENT_DIR/sbk-install.log"
+    LOG_FILE="$CURRENT_DIR/sbk-install.log"
+
+    # Reset log after 10000 lines
+    if [[ -f "$LOG_FILE" ]] && [[ $(wc -l < "$LOG_FILE") -gt 10000 ]]; then
+        rm -f "$LOG_FILE"
+    fi
+
     exec > >(tee >(
         while IFS= read -r line; do
-            printf "%s: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$line" >> "$CURRENT_DIR/sbk-install.log"
+            printf "%s: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$line" >> "$LOG_FILE"
         done
     ))
     exec 2>&1
