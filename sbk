@@ -428,6 +428,7 @@ while true; do
             ;;
         18)
             info_msg "Exiting..."
+            clear
             exit 0
             ;;
         *)
