@@ -2,14 +2,14 @@
 A menu driven sript for enabling Secure Boot on Kali Linux
 
 > [!WARNING]
-> I do not take any response on you using this script! This script could be dangerous and break your setup!
-> Success depends heavily on how your motherboard's UEFI firmware responds to it.
-> This script is not tested widely yet. You were warned!
+> I do not take any responsibility on you using this script! This script could be dangerous and can break your system!
+> Success heavily depends on machine specific variables.
+> This script is not tested widely. You were warned!
 ## ❓ Why?
 
-So I am a beginner (relatively). I've tried many Linux distributions, but Kali is the only one that truly satisfies my needs. The problem is that while other distros either work out-of-the-box or can be relatively easily configured for Secure Boot, I struggled to make it work with Kali.
+I've tried many Linux distributions, but Kali is the only one that truly satisfies my needs. The problem is that while other distros either work out-of-the-box or can be relatively easily configured for Secure Boot, I struggled to make it work with Kali.
 
-I need Secure Boot for two main reasons:
+I needed Secure Boot for two main reasons:
 
 1. To maintain a stable dual-boot setup with Windows (for gaming and other applications).
 
