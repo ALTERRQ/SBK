@@ -29,7 +29,7 @@ I quickly realized that automating this process with a script while experimentin
 
 ## Usage:
 1. Clone the repo
-2. Run `sudo ./sbk`, it will install SBK and it's dependencies
+2. Run `sudo ./install` inside the cloned directory, it will install SBK and it's dependencies
 3. Run option 1 and follow the instructions the script shows
 
 The process consists out of two parts:
