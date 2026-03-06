@@ -41,72 +41,25 @@ KERNEL_IMAGE="/boot/vmlinuz-$KERNEL_VERSION"
 MS_GUID=77fa9abd-0359-4d32-bd60-28f4e78f784b
 CURRENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEF_CONFIG_FILE="$SBK_HOME/config"
-INSTALLED=0
 
 # Logging
-if [[ -f /usr/local/bin/sbk ]]; then
-    LOG_FILE="$SBK_HOME/sbk.log"
+LOG_FILE="$SBK_HOME/sbk.log"
 
-    # Reset log after 10000 lines
-    if [[ -f "$LOG_FILE" ]] && [[ $(wc -l < "$LOG_FILE") -gt 10000 ]]; then
-        rm -f "$LOG_FILE"
-    fi
-
-    exec > >(tee >(
-        while IFS= read -r line; do
-            printf "%s: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$line" >> "$LOG_FILE"
-        done
-    ))
-    exec 2>&1
-else
-    LOG_FILE="$CURRENT_DIR/sbk-install.log"
-
-    # Reset log after 10000 lines
-    if [[ -f "$LOG_FILE" ]] && [[ $(wc -l < "$LOG_FILE") -gt 10000 ]]; then
-        rm -f "$LOG_FILE"
-    fi
-
-    exec > >(tee >(
-        while IFS= read -r line; do
-            printf "%s: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$line" >> "$LOG_FILE"
-        done
-    ))
-    exec 2>&1
+# Reset log after 10000 lines
+if [[ -f "$LOG_FILE" ]] && [[ $(wc -l < "$LOG_FILE") -gt 10000 ]]; then
+    rm -f "$LOG_FILE"
 fi
+
+exec > >(tee >(
+    while IFS= read -r line; do
+        printf "%s: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$line" >> "$LOG_FILE"
+    done
+))
+exec 2>&1
 
 # Check root
 if [[ $EUID -ne 0 ]]; then
     error_exit "This script must be run as root."
-fi
-
-# Create a home for the script in /root
-if [[ ! -d "$SBK_HOME" ]]; then
-    info_msg "Creating HOME..."
-    mkdir -vp "$SBK_HOME"/{auth,bak,cfg,esl,extract,scripts} || error_exit "Failed to create $SBK_HOME"
-    success_msg "HOME created successfully."
-
-elif [[ ! -d "$SBK_HOME"/auth ]]; then
-    info_msg "Creating HOME..."
-    mkdir -vp "$SBK_HOME"/{auth,bak,cfg,esl,extract} || error_exit "Failed to recreate $SBK_HOME"
-    success_msg "HOME created successfully."
-
-    INSTALLED=1
-    success_msg "Script is already installed."
-fi
-
-# Install dependencies
-DEPLIST="openssl efitools sbsigntool pesign uuid-runtime systemd-boot-tools dkms"
-if [[ ! -f "$SBK_HOME/config" ]]; then
-    sudo apt update
-    sudo apt install $DEPLIST -y
-    if [ $? -ne 0 ]; then
-        error_exit "Failed to install dependencies"
-    else
-        success_msg "Dependencies installed successfully."
-        read -rp "Press Enter to continue..."
-    fi
-else
-    info_msg "Dependencies should be installed..."
 fi
 
 # Source config or create config and gather information from efi
@@ -197,7 +150,6 @@ else
         "OEM_GUID"
         "KEK_MICROSOFT_LISTS"
         "DB_MICROSOFT_LISTS"
-        "INSTALLED"
     )
 
     # Convert to arrays and format them properly
@@ -225,29 +177,6 @@ else
     done
         success_msg "EFI vars saved successfully."
         read -rp "Press Enter to continue..."
-fi
-
-# "Install" script
-if [ $INSTALLED -eq 0 ]; then
-    info_msg "Installing script..."
-
-    # Copy sbk to /usr/local/bin
-    cp -vf "$CURRENT_DIR/sbk" "/usr/local/bin" || error_exit "Failed to copy sbk to /usr/local/bin"
-
-    # Copy functions to home
-    cp -vf "$CURRENT_DIR/functions" "$SBK_HOME/scripts/functions" || error_exit "Failed to copy functions to SBK_HOME"
-
-    # Copy kernel-sbk-postinst to home
-    cp -vf "$CURRENT_DIR/kernel-sbk-postinst" "$SBK_HOME/scripts/kernel-sbk-postinst" || error_exit "Failed to copy kernel-sbk-postinst to SBK_HOME"
-
-    # Copy grub-sbk-postinst to home
-    cp -vf "$CURRENT_DIR/grub-sbk-postinst" "$SBK_HOME/scripts/grub-sbk-postinst" || error_exit "Failed to copy grub-sbk-postinst to SBK_HOME"
-
-    INSTALLED=1
-    modify_config "INSTALLED" "1"
-    success_msg "Script installed succesfully. To use script run the command: \"sudo sbk\" anywhere."
-    read -rp "Press Enter to continue..."
-    exit 0
 fi
 
 complete_setup_stage1(){
