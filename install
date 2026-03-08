@@ -34,20 +34,7 @@ warning_msg() {
 }
 
 # Some vars
-LOG_FILE="$CURRENT_DIR/install.log"
 SBK_HOME=/root/sbk
-
-# Reset log after 10000 lines
-if [[ -f "$LOG_FILE" ]] && [[ $(wc -l < "$LOG_FILE") -gt 10000 ]]; then
-    rm -f "$LOG_FILE"
-fi
-
-exec > >(tee >(
-    while IFS= read -r line; do
-        printf "%s: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "$line" >> "$LOG_FILE"
-    done
-))
-exec 2>&1
 
 # Check root
 if [[ $EUID -ne 0 ]]; then
